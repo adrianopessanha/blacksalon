@@ -1,0 +1,5 @@
+import { useState, useEffect } from 'react'
+
+export function ReportsDashboard() {
+    return <div className="p-10 text-white">Reports Dashboard - Minimal Mode</div>
+}
