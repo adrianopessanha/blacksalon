@@ -39,8 +39,7 @@ export function ReportsDashboard() {
 
                 const q = query(
                     collection(db, 'lancamentos'),
-                    limit(20)
-                    // limit query to debug permissions
+                    where('data', '>=', Timestamp.fromDate(startOfMonth))
                 )
 
                 const snapshot = await getDocs(q)
@@ -82,7 +81,7 @@ export function ReportsDashboard() {
                 }
 
                 const getStore = (d) => {
-                    const barber = BARBERS.find(b => b.id === d.barber_id)
+                    const barber = BARBERS.find(b => b.id === d.barbeiro_id)
                     return d.loja_id || barber?.store || 'unknown'
                 }
 
@@ -132,10 +131,10 @@ export function ReportsDashboard() {
                 .sort((a, b) => b.data.seconds - a.data.seconds) // Client-side sort
 
             const filtered = raw.filter(d => {
-                const barber = BARBERS.find(b => b.id === d.barber_id)
+                const barber = BARBERS.find(b => b.id === d.barbeiro_id)
                 const store = d.loja_id || barber?.store || 'unknown'
 
-                const matchBarber = filters.barberId === 'all' || d.barber_id === filters.barberId
+                const matchBarber = filters.barberId === 'all' || d.barbeiro_id === filters.barberId
                 const matchStore = filters.storeId === 'all' || store === filters.storeId
                 return matchBarber && matchStore
             })
@@ -183,7 +182,7 @@ export function ReportsDashboard() {
             }, { gross: 0, commission: 0, count: 0 })
 
             const getStore = (d) => {
-                const barber = BARBERS.find(b => b.id === d.barber_id)
+                const barber = BARBERS.find(b => b.id === d.barbeiro_id)
                 return d.loja_id || barber?.store || 'unknown'
             }
 

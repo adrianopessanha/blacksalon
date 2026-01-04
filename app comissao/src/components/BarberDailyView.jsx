@@ -19,6 +19,14 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
     const [deleteConfirmation, setDeleteConfirmation] = useState(null)
     const [closeCommissionConfirmation, setCloseCommissionConfirmation] = useState(false)
 
+    // --- Dynamic Goal Logic (Gamification) ---
+    // Moved to top scope to avoid ReferenceErrors
+    const MONTHLY_TARGET = 4000.00
+    const AVG_COMMISSION_VALUE = 16.00
+    const today = new Date()
+    const dayOfWeek = today.getDay() // 0 = Sun, 1 = Mon
+    const isOffDay = dayOfWeek === 0 || dayOfWeek === 1 // Sunday or Monday
+
     useEffect(() => {
         if (!barberId) return
 
@@ -51,6 +59,13 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
             const docs = []
             snapshot.forEach(doc => docs.push({ id: doc.id, ...doc.data() }))
 
+            let lastClosureDate = null
+
+            // 1. Find the last commission closure date
+            // We need to iterate all docs first or assume they are sorted?
+            // They are sorted descending by default in our query logic (client sort confirms).
+            // So the first 'fechamento_comissao' we hit is the latest.
+
             // Client-side Sort & Filter (Descending)
             docs.sort((a, b) => {
                 const dateA = a.data?.toDate?.() || new Date(0)
@@ -58,15 +73,28 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
                 return dateB - dateA
             })
 
+            for (const doc of docs) {
+                if (doc.tipo === 'fechamento_comissao') {
+                    lastClosureDate = doc.data.toDate()
+                    break // Found the latest
+                }
+            }
+
             docs.forEach(data => {
                 try {
                     if (!data?.data?.toDate) return
 
                     const date = data.data.toDate()
 
-                    // Calculate Monthly Commission (Net Balance)
+                    // Calculate Cycle Commission (Net Balance)
+                    // Logic: Include ONLY if date > lastClosureDate (if exists)
+                    // If no closure, use startOfMonth (or just all history if user wants? Sticking to month for safety unless requested otherwise, 
+                    // actually user implied "zerar", so cycle based is best. If no closure, let's assume Month Start is a good fallback 
+                    // OR just accumulate everything if they never closed? 
+                    // Let's stick to: If closure exists, use it. Else use StartOfMonth.
+                    const cycleStartDate = lastClosureDate || startOfMonth
 
-                    if (date >= startOfMonth) {
+                    if (date > cycleStartDate) {
                         mComm += (data.comissao_barbeiro || 0)
 
                         // [NEW] Sum Advances
@@ -108,7 +136,6 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
             setStats({
                 todayCount: tCount,
                 todayValue: tValue,
-                todayCommission: tComm,
                 todayCommission: tComm,
                 monthCommission: mComm,
                 monthAdvances: mAdvances,
@@ -204,6 +231,50 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
 
     if (loading) return <div className="text-gray-500 text-center py-4">Carregando dados...</div>
 
+
+
+    // Helper to calculate remaining working days (Tue-Sat)
+    const getRemainingWorkDays = () => {
+        const today = new Date()
+        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+        let count = 0
+        const current = new Date(today) // Clone to iterate
+
+        // Iterate from today until end of month
+        while (current <= endOfMonth) {
+            const day = current.getDay()
+            // 0 = Sunday, 1 = Monday. We exclude these.
+            if (day !== 0 && day !== 1) {
+                count++
+            }
+            current.setDate(current.getDate() + 1)
+        }
+        return count > 0 ? count : 1 // Avoid div/0
+    }
+
+    const remainingWorkDays = getRemainingWorkDays()
+    const currentMonthCommission = stats.monthCommission
+
+    // logic: If we already exceeded target, goal is 0. 
+    // Else divide remaining balance by remaining days.
+    const remainingBalance = Math.max(0, MONTHLY_TARGET - currentMonthCommission)
+    const dailyGoal = remainingWorkDays > 0 ? (remainingBalance / remainingWorkDays) : 0
+
+    // Services needed to hit TODAY's goal
+    const servicesNeeded = Math.ceil(dailyGoal / AVG_COMMISSION_VALUE)
+
+    // Calculate Today's Positive Production (ignoring negative advances for the visual goal)
+    const todayProduction = stats.todayServices.reduce((acc, curr) => {
+        const val = parseFloat(curr.comissao_barbeiro) || 0
+        return val > 0 ? acc + val : acc
+    }, 0)
+
+    const isGoalMet = todayProduction >= dailyGoal
+    const goalProgress = dailyGoal > 0 ? Math.min(100, (todayProduction / dailyGoal) * 100) : 100
+
+    const todayStr = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric' })
+
+
     return (
         <div className="mt-8 border-t border-gray-800 pt-6">
             <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center justify-between">
@@ -263,7 +334,66 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
                 </div>
             )}
 
-            {/* Summary Cards */}
+
+            {/* GAMIFICATION WIDGET */}
+            <div className={`relative overflow-hidden rounded-2xl p-6 shadow-xl transition-all ${isGoalMet ? 'bg-gradient-to-br from-green-900 via-green-800 to-gray-900 border border-green-500' : 'bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 border border-gray-800'}`}>
+
+                {/* Background Glow Effect */}
+                {isGoalMet && <div className="absolute inset-0 bg-green-500/10 blur-3xl animate-pulse" />}
+
+                <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-4">
+                        <div>
+                            <h2 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-1">
+                                {isGoalMet ? '🔥 Meta Batida!' : (isOffDay ? `Bom Descanso (${todayStr})` : `Meta do Dia (${todayStr})`)}
+                            </h2>
+                            <div className="flex items-baseline gap-2">
+                                <span className={`text-4xl font-black ${isGoalMet ? 'text-green-400' : (isOffDay ? 'text-gray-500' : 'text-white')}`}>
+                                    {isOffDay ? 'OFF' : dailyGoal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                </span>
+                                {remainingBalance > 0 && !isOffDay && (
+                                    <span className="text-xs text-gray-500">
+                                        (Faltam {remainingBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} para a meta)
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <div className="bg-gray-950/50 rounded-lg px-3 py-1 border border-white/10 backdrop-blur-sm">
+                                <span className="text-xs text-gray-400 block">Esforço Estimado</span>
+                                <span className="font-bold text-white text-lg">
+                                    {isOffDay ? '-' : `~${servicesNeeded}`} <span className="text-xs font-normal text-gray-400">cortes</span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Message */}
+                    <p className={`text-sm mb-4 font-medium ${isGoalMet ? 'text-green-200' : 'text-gray-400'}`}>
+                        {isGoalMet
+                            ? "Parabéns! Você atingiu o objetivo de hoje. O que vier agora é lucro extra! 🚀"
+                            : `Meta recalibrada baseada nos seus ${remainingWorkDays} dias úteis restantes.`
+                        }
+                    </p>
+
+                    {/* Progress Bar */}
+                    <div className="h-4 bg-gray-950 rounded-full overflow-hidden border border-white/5 relative">
+                        <div
+                            className={`h-full transition-all duration-1000 ease-out ${isGoalMet ? 'bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.5)]' : 'bg-cyan-600'}`}
+                            style={{ width: `${goalProgress}%` }}
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-md">
+                            {Math.floor(goalProgress)}%
+                        </div>
+                    </div>
+
+                    {/* Tiny stats below bar */}
+                    <div className="flex justify-between mt-2 text-xs text-gray-500 font-medium">
+                        <span>Hoje: {todayProduction.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                        <span>Falta Hoje: {Math.max(0, dailyGoal - todayProduction).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                    </div>
+                </div>
+            </div>
             <div className="grid grid-cols-2 gap-3 mb-6">
                 <div className="bg-gray-950 p-4 rounded-xl border border-gray-800">
                     <p className="text-xs text-gray-500 mb-1">Comissão Hoje ({isAdmin ? 'Líquido' : 'Total'})</p>
