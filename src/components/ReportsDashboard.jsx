@@ -30,9 +30,19 @@ const PAYMENT_COLORS = {
     'Vale Presente': 'text-pink-400 bg-pink-900/30 border-pink-800/50'
 }
 
-const isNonRevenue = (item) =>
-    ['Assinante', 'Vale Presente'].includes(item.forma_pagamento) ||
+// Operações financeiras (adiantamento, fechamento) - NÃO são atendimentos
+const isFinancial = (item) =>
     ['adiantamento', 'fechamento_comissao'].includes(item.tipo)
+
+// Serviços que NÃO geram receita na hora (Assinante/Vale Presente)
+const isNonCashRevenue = (item) =>
+    ['Assinante', 'Vale Presente'].includes(item.forma_pagamento)
+
+// Gera receita real (exclui assinante, vale presente, adiantamento, fechamento)
+const isRevenue = (item) => !isFinancial(item) && !isNonCashRevenue(item)
+
+// É um atendimento real (serviço/produto) - inclui assinante e vale presente
+const isService = (item) => !isFinancial(item)
 
 // =============================================
 // MAIN COMPONENT
@@ -166,25 +176,35 @@ export function ReportsDashboard() {
     const analytics = useMemo(() => {
         if (!data.length) return null
 
-        const revenue = data.filter(d => !isNonRevenue(d))
-        const gross = revenue.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-        const commission = data.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-        const totalCount = data.length
-        const revenueCount = revenue.length
-        const avgTicket = avg(gross, revenueCount)
+        // Serviços reais (exclui adiantamento/fechamento)
+        const services = data.filter(d => isService(d))
+        // Serviços que geram receita (exclui assinante/vale presente também)
+        const revenueItems = data.filter(d => isRevenue(d))
 
-        // Payment breakdown
+        // Faturamento = só serviços que geram receita na hora
+        const gross = revenueItems.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+        // Comissão = de TODOS os serviços (incluindo assinante/vale presente, excluindo fechamento/adiantamento)
+        const commission = services.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        // Atendimentos = todos os serviços (incluindo assinante/vale presente)
+        const serviceCount = services.length
+        const totalCount = data.length
+        // Ticket Médio = faturamento / atendimentos (incluindo assinante/vale presente)
+        const avgTicket = avg(gross, serviceCount)
+
+        // Payment breakdown (todos os serviços, incluindo assinante/vale presente)
         const byPayment = {}
-        revenue.forEach(d => {
+        services.forEach(d => {
             const pm = d.forma_pagamento || 'Outros'
             if (!byPayment[pm]) byPayment[pm] = { count: 0, total: 0 }
             byPayment[pm].count++
             byPayment[pm].total += parseFloat(d.valor_bruto) || 0
         })
+        // Total geral para percentuais (inclui tudo)
+        const paymentTotal = services.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
-        // Service breakdown
+        // Service breakdown (todos os serviços reais)
         const byService = {}
-        data.filter(d => d.tipo === 'servico' || !d.tipo).forEach(d => {
+        services.forEach(d => {
             const svc = d.servico_descricao || 'Não especificado'
             if (!byService[svc]) byService[svc] = { count: 0, total: 0, commission: 0 }
             byService[svc].count++
@@ -203,23 +223,26 @@ export function ReportsDashboard() {
                 : 'Sem data'
             if (!byDay[dateStr]) byDay[dateStr] = { items: [], gross: 0, commission: 0, count: 0 }
             byDay[dateStr].items.push(d)
-            if (!isNonRevenue(d)) byDay[dateStr].gross += parseFloat(d.valor_bruto) || 0
-            byDay[dateStr].commission += parseFloat(d.comissao_barbeiro) || 0
+            if (isRevenue(d)) byDay[dateStr].gross += parseFloat(d.valor_bruto) || 0
+            if (isService(d)) byDay[dateStr].commission += parseFloat(d.comissao_barbeiro) || 0
             byDay[dateStr].count++
         })
 
-        // Per-barber breakdown
+        // Per-barber breakdown (só serviços reais, exclui fechamento/adiantamento)
         const byBarber = {}
         data.forEach(d => {
             const bid = d.barbeiro_id || 'unknown'
             const bname = d.barbeiro_nome || 'Desconhecido'
-            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, gross: 0, commission: 0, services: {} }
+            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, serviceCount: 0, gross: 0, commission: 0, services: {} }
             byBarber[bid].count++
-            if (!isNonRevenue(d)) byBarber[bid].gross += parseFloat(d.valor_bruto) || 0
-            byBarber[bid].commission += parseFloat(d.comissao_barbeiro) || 0
-            const svc = d.servico_descricao || 'Outros'
-            if (!byBarber[bid].services[svc]) byBarber[bid].services[svc] = 0
-            byBarber[bid].services[svc]++
+            if (isService(d)) {
+                byBarber[bid].serviceCount++
+                byBarber[bid].commission += parseFloat(d.comissao_barbeiro) || 0
+                const svc = d.servico_descricao || 'Outros'
+                if (!byBarber[bid].services[svc]) byBarber[bid].services[svc] = 0
+                byBarber[bid].services[svc]++
+            }
+            if (isRevenue(d)) byBarber[bid].gross += parseFloat(d.valor_bruto) || 0
         })
 
         // Subscription metrics
@@ -237,9 +260,9 @@ export function ReportsDashboard() {
         rawData.forEach(d => {
             const store = getStore(d)
             if (!byStore[store]) byStore[store] = { gross: 0, commission: 0, count: 0 }
-            if (!isNonRevenue(d)) byStore[store].gross += parseFloat(d.valor_bruto) || 0
-            byStore[store].commission += parseFloat(d.comissao_barbeiro) || 0
-            byStore[store].count++
+            if (isRevenue(d)) byStore[store].gross += parseFloat(d.valor_bruto) || 0
+            if (isService(d)) byStore[store].commission += parseFloat(d.comissao_barbeiro) || 0
+            if (isService(d)) byStore[store].count++
         })
 
         // Best day
@@ -255,7 +278,7 @@ export function ReportsDashboard() {
         const peakHour = Object.entries(byHour).sort((a, b) => b[1] - a[1])[0]
 
         return {
-            gross, commission, totalCount, revenueCount, avgTicket,
+            gross, commission, totalCount, serviceCount, avgTicket, paymentTotal,
             byPayment, topServices, byDay, byBarber, byStore,
             subCount: subData.length, subCommissionCost, internalRevenue,
             bestDay, peakHour
@@ -301,7 +324,7 @@ export function ReportsDashboard() {
                 period: { start: filters.startDate, end: filters.endDate },
                 filters: { barber: filters.barberId, store: filters.storeId }
             },
-            metrics: analytics ? { gross: analytics.gross, commission: analytics.commission, count: analytics.totalCount } : {},
+            metrics: analytics ? { gross: analytics.gross, commission: analytics.commission, count: analytics.serviceCount } : {},
             data: data.map(d => ({
                 date: d.data?.seconds ? new Date(d.data.seconds * 1000).toISOString().split('T')[0] : null,
                 barber: d.barbeiro_nome,
@@ -549,7 +572,7 @@ export function ReportsDashboard() {
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                                 <MetricCard label="Faturamento Bruto" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
                                 <MetricCard label="Comissões Totais" value={fmt(analytics.commission)} icon={Users} color="green" />
-                                <MetricCard label="Atendimentos" value={analytics.totalCount} icon={Scissors} color="blue" />
+                                <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
                             </div>
 
@@ -574,7 +597,7 @@ export function ReportsDashboard() {
                             </div>
 
                             {/* Payment Breakdown */}
-                            <PaymentBreakdown byPayment={analytics.byPayment} gross={analytics.gross} />
+                            <PaymentBreakdown byPayment={analytics.byPayment} total={analytics.paymentTotal} />
 
                             {/* Top Services */}
                             <TopServicesCard topServices={analytics.topServices} />
@@ -734,14 +757,16 @@ function BarberDetailView({ barber, analytics, data }) {
 
     const storeName = STORES.find(s => s.id === barber.store)?.name || barber.store
 
-    // Payment breakdown for this barber
+    // Payment breakdown for this barber (todos os serviços, incluindo assinante/vale)
     const barberPayments = {}
-    data.filter(d => !isNonRevenue(d)).forEach(d => {
+    const barberServices = data.filter(d => isService(d))
+    barberServices.forEach(d => {
         const pm = d.forma_pagamento || 'Outros'
         if (!barberPayments[pm]) barberPayments[pm] = { count: 0, total: 0 }
         barberPayments[pm].count++
         barberPayments[pm].total += parseFloat(d.valor_bruto) || 0
     })
+    const barberPaymentTotal = barberServices.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
     // Services for this barber
     const topServices = Object.entries(barberData.services)
@@ -751,10 +776,11 @@ function BarberDetailView({ barber, analytics, data }) {
     // Daily performance
     const dailyPerf = {}
     data.forEach(d => {
+        if (!isService(d)) return
         const dateStr = d.data?.seconds ? new Date(d.data.seconds * 1000).toLocaleDateString('pt-BR') : null
         if (!dateStr) return
         if (!dailyPerf[dateStr]) dailyPerf[dateStr] = { gross: 0, commission: 0, count: 0 }
-        if (!isNonRevenue(d)) dailyPerf[dateStr].gross += parseFloat(d.valor_bruto) || 0
+        if (isRevenue(d)) dailyPerf[dateStr].gross += parseFloat(d.valor_bruto) || 0
         dailyPerf[dateStr].commission += parseFloat(d.comissao_barbeiro) || 0
         dailyPerf[dateStr].count++
     })
@@ -774,7 +800,7 @@ function BarberDetailView({ barber, analytics, data }) {
                             <span className="text-xs bg-gray-800/80 text-gray-400 px-2.5 py-1 rounded-full flex items-center gap-1">
                                 <Store size={11} /> {storeName}
                             </span>
-                            <span className="text-xs text-gray-500">{barberData.count} atendimentos no período</span>
+                            <span className="text-xs text-gray-500">{barberData.serviceCount} atendimentos no período</span>
                         </div>
                     </div>
                 </div>
@@ -784,13 +810,13 @@ function BarberDetailView({ barber, analytics, data }) {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <MetricCard label="Faturamento" value={fmt(barberData.gross)} icon={DollarSign} color="cyan" />
                 <MetricCard label="Comissão Gerada" value={fmt(barberData.commission)} icon={Award} color="green" />
-                <MetricCard label="Atendimentos" value={barberData.count} icon={Scissors} color="blue" />
-                <MetricCard label="Ticket Médio" value={fmt(avg(barberData.gross, barberData.count))} icon={TrendingUp} color="yellow" />
+                <MetricCard label="Atendimentos" value={barberData.serviceCount} icon={Scissors} color="blue" />
+                <MetricCard label="Ticket Médio" value={fmt(avg(barberData.gross, barberData.serviceCount))} icon={TrendingUp} color="yellow" />
             </div>
 
             {/* Payment + Services side by side */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <PaymentBreakdown byPayment={barberPayments} gross={barberData.gross} />
+                <PaymentBreakdown byPayment={barberPayments} total={barberPaymentTotal} />
 
                 {/* Top Services */}
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-lg">
@@ -852,9 +878,10 @@ function StoreDetailView({ store, analytics, data }) {
         .map(([id, info]) => ({ id, ...info }))
         .sort((a, b) => b.gross - a.gross)
 
-    // Payment breakdown for this store
+    // Payment breakdown for this store (todos os serviços, incluindo assinante/vale)
+    const storeServices = data.filter(d => isService(d))
     const storePayments = {}
-    data.filter(d => !isNonRevenue(d)).forEach(d => {
+    storeServices.forEach(d => {
         const pm = d.forma_pagamento || 'Outros'
         if (!storePayments[pm]) storePayments[pm] = { count: 0, total: 0 }
         storePayments[pm].count++
@@ -874,7 +901,7 @@ function StoreDetailView({ store, analytics, data }) {
                     <div>
                         <h2 className="text-xl font-bold text-white">{store.name}</h2>
                         <div className="flex items-center gap-3 mt-1">
-                            <span className="text-xs text-gray-500">{analytics.totalCount} atendimentos no período</span>
+                            <span className="text-xs text-gray-500">{analytics.serviceCount} atendimentos no período</span>
                             <span className="text-xs text-gray-500">{barberRanking.length} barbeiros</span>
                         </div>
                     </div>
@@ -885,7 +912,7 @@ function StoreDetailView({ store, analytics, data }) {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <MetricCard label="Faturamento" value={fmt(analytics.gross)} icon={DollarSign} color={color} />
                 <MetricCard label="Comissões" value={fmt(analytics.commission)} icon={Users} color="green" />
-                <MetricCard label="Atendimentos" value={analytics.totalCount} icon={Scissors} color="blue" />
+                <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
             </div>
 
@@ -908,7 +935,7 @@ function StoreDetailView({ store, analytics, data }) {
                                 <div className="flex items-center justify-between mb-1">
                                     <span className="text-sm font-medium text-gray-200 truncate">{b.name}</span>
                                     <div className="flex items-center gap-3 shrink-0 ml-2">
-                                        <span className="text-xs text-gray-500">{b.count} atend.</span>
+                                        <span className="text-xs text-gray-500">{b.serviceCount} atend.</span>
                                         <span className="text-sm font-bold text-cyan-400">{fmt(b.gross)}</span>
                                     </div>
                                 </div>
@@ -923,7 +950,7 @@ function StoreDetailView({ store, analytics, data }) {
                                 <div className="flex items-center gap-2 mt-1">
                                     <span className="text-[10px] text-gray-500">Comissão: {fmt(b.commission)}</span>
                                     <span className="text-[10px] text-gray-600">|</span>
-                                    <span className="text-[10px] text-gray-500">Ticket médio: {fmt(avg(b.gross, b.count))}</span>
+                                    <span className="text-[10px] text-gray-500">Ticket médio: {fmt(avg(b.gross, b.serviceCount))}</span>
                                 </div>
                             </div>
                         </div>
@@ -934,7 +961,7 @@ function StoreDetailView({ store, analytics, data }) {
 
             {/* Payment Breakdown + Insights */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <PaymentBreakdown byPayment={storePayments} gross={analytics.gross} />
+                <PaymentBreakdown byPayment={storePayments} total={analytics.paymentTotal} />
 
                 {/* Quick Insights */}
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-lg">
@@ -1010,7 +1037,7 @@ function PaymentBadge({ method }) {
     )
 }
 
-function PaymentBreakdown({ byPayment, gross }) {
+function PaymentBreakdown({ byPayment, total }) {
     const sorted = Object.entries(byPayment).sort((a, b) => b[1].total - a[1].total)
 
     return (
@@ -1021,7 +1048,7 @@ function PaymentBreakdown({ byPayment, gross }) {
             <div className="space-y-3">
                 {sorted.map(([method, info]) => {
                     const Icon = PAYMENT_ICONS[method] || CreditCard
-                    const percentage = gross > 0 ? (info.total / gross) * 100 : 0
+                    const percentage = total > 0 ? (info.total / total) * 100 : 0
                     const colors = PAYMENT_COLORS[method] || 'text-gray-400 bg-gray-800/50 border-gray-700'
                     const barColor = colors.split(' ')[0].replace('text-', 'bg-')
 
