@@ -1,15 +1,22 @@
 import { useState, useEffect } from 'react'
 import { db, collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, deleteDoc, doc } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
-import { DollarSign, Calendar, TrendingUp, Clock, Wallet, CheckCircle, AlertCircle, Trash2 } from 'lucide-react'
+import { DollarSign, Calendar, TrendingUp, Clock, Wallet, CheckCircle, AlertCircle, Trash2, MessageCircle } from 'lucide-react'
 
-export function BarberDailyView({ barberId, barberName, isAdmin }) {
+const MONTHLY_TARGET = 4000
+const AVG_COMMISSION_VALUE = 30
+
+export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate }) {
+    const todayDay = new Date().getDay()
+    const isOffDay = todayDay === 0 || todayDay === 1 // Sunday(0) or Monday(1) are off
+
     const [stats, setStats] = useState({
         todayCount: 0,
         todayValue: 0,
         todayCommission: 0,
         monthCommission: 0,
-        monthAdvances: 0, // [NEW] Tracking advances
+        monthProduction: 0,
+        monthAdvances: 0,
         todayServices: []
     })
     const [loading, setLoading] = useState(true)
@@ -19,13 +26,10 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
     const [deleteConfirmation, setDeleteConfirmation] = useState(null)
     const [closeCommissionConfirmation, setCloseCommissionConfirmation] = useState(false)
 
-    // --- Dynamic Goal Logic (Gamification) ---
-    // Moved to top scope to avoid ReferenceErrors
-    const MONTHLY_TARGET = 4000.00
-    const AVG_COMMISSION_VALUE = 16.00
-    const today = new Date()
-    const dayOfWeek = today.getDay() // 0 = Sun, 1 = Mon
-    const isOffDay = dayOfWeek === 0 || dayOfWeek === 1 // Sunday or Monday
+    // Using selectedDate prop or defaulting to today
+    const targetDateStr = selectedDate || new Date().toISOString().split('T')[0]
+
+    // ...
 
     useEffect(() => {
         if (!barberId) return
@@ -34,18 +38,19 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
         startOfMonth.setHours(0, 0, 0, 0)
 
-        const startOfToday = new Date()
-        startOfToday.setHours(0, 0, 0, 0)
+        // Parse Target Date
+        const [y, m, d] = targetDateStr.split('-').map(Number)
+        const startOfTargetDay = new Date(y, m - 1, d)
+        startOfTargetDay.setHours(0, 0, 0, 0)
 
-        // Query simplified to avoid Index issues
+        const endOfTargetDay = new Date(y, m - 1, d)
+        endOfTargetDay.setHours(23, 59, 59, 999)
+
         const q = query(
             collection(db, 'lancamentos'),
             where('barbeiro_id', '==', barberId),
-            orderBy('data', 'desc'), // Attempting orderBy since user created index previously, if fails we fallback? 
-            // Actually, user REMOVED index dependency earlier. Let's stick to safe client-side sort if we want extreme safety, 
-            // BUT user says "time is wrong", maybe sorting is off? 
-            // Stick to client sort for safety but ensure correct time display.
-            limit(100)
+            orderBy('data', 'desc'),
+            limit(200)
         )
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -53,30 +58,25 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
             let tValue = 0
             let tComm = 0
             let mComm = 0
-            let mAdvances = 0 // [NEW] Accumulator
+            let mProduction = 0 // Produção do MÊS inteiro (para meta)
+            let mAdvances = 0
             let todayList = []
 
             const docs = []
             snapshot.forEach(doc => docs.push({ id: doc.id, ...doc.data() }))
 
-            let lastClosureDate = null
-
-            // 1. Find the last commission closure date
-            // We need to iterate all docs first or assume they are sorted?
-            // They are sorted descending by default in our query logic (client sort confirms).
-            // So the first 'fechamento_comissao' we hit is the latest.
-
-            // Client-side Sort & Filter (Descending)
+            // Sort docs by date desc
             docs.sort((a, b) => {
-                const dateA = a.data?.toDate?.() || new Date(0)
-                const dateB = b.data?.toDate?.() || new Date(0)
-                return dateB - dateA
+                const dA = a.data?.toDate ? a.data.toDate() : new Date(0)
+                const dB = b.data?.toDate ? b.data.toDate() : new Date(0)
+                return dB - dA
             })
 
+            let lastClosureDate = null
             for (const doc of docs) {
                 if (doc.tipo === 'fechamento_comissao') {
                     lastClosureDate = doc.data.toDate()
-                    break // Found the latest
+                    break
                 }
             }
 
@@ -86,42 +86,41 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
 
                     const date = data.data.toDate()
 
-                    // Calculate Cycle Commission (Net Balance)
-                    // Logic: Include ONLY if date > lastClosureDate (if exists)
-                    // If no closure, use startOfMonth (or just all history if user wants? Sticking to month for safety unless requested otherwise, 
-                    // actually user implied "zerar", so cycle based is best. If no closure, let's assume Month Start is a good fallback 
-                    // OR just accumulate everything if they never closed? 
-                    // Let's stick to: If closure exists, use it. Else use StartOfMonth.
+                    // Cycle Commission (para saldo a receber - usa ciclo de fechamento)
                     const cycleStartDate = lastClosureDate || startOfMonth
 
+                    // [FIX] Produção mensal para META - considera o MÊS INTEIRO, não o ciclo
+                    if (date >= startOfMonth) {
+                        if (data.tipo !== 'adiantamento' && data.tipo !== 'fechamento_comissao') {
+                            mProduction += (data.comissao_barbeiro || 0)
+                        }
+                    }
+
+                    // Saldo a receber - considera apenas após último fechamento
                     if (date > cycleStartDate) {
                         mComm += (data.comissao_barbeiro || 0)
 
-                        // [NEW] Sum Advances
                         if (data.tipo === 'adiantamento') {
                             mAdvances += Math.abs(data.comissao_barbeiro || 0)
                         }
                     }
 
-                    // Calculate Today's Stats
-                    if (date >= startOfToday) {
-                        // Logic to EXCLUDE non-cash payments from Revenue (Faturamento)
-                        // Checks if payment method or type indicates non-cash
+                    // Selected Date Stats
+                    if (date >= startOfTargetDay && date <= endOfTargetDay) {
                         const isNonRevenue = ['Assinante', 'Vale Presente', 'venda_assinatura', 'venda_vale'].includes(data.forma_pagamento) ||
                             ['venda_assinatura', 'venda_vale', 'adiantamento', 'fechamento_comissao'].includes(data.tipo)
 
-                        // General counting logic
                         if (data.tipo !== 'adiantamento' && data.tipo !== 'fechamento_comissao') {
                             tCount++
-
-                            // Only add to Total Value (Faturamento) if it is CASH revenue
                             if (!isNonRevenue) {
                                 tValue += (data.valor_bruto || 0)
                             }
                         }
 
-                        // Commission is ALWAYS calculated (you get paid for cutting subscriber hair)
-                        tComm += (data.comissao_barbeiro || 0)
+                        // [FIX] Não incluir fechamento_comissao na comissão do dia
+                        if (data.tipo !== 'fechamento_comissao') {
+                            tComm += (data.comissao_barbeiro || 0)
+                        }
 
                         todayList.push({
                             ...data,
@@ -138,6 +137,7 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
                 todayValue: tValue,
                 todayCommission: tComm,
                 monthCommission: mComm,
+                monthProduction: mProduction,
                 monthAdvances: mAdvances,
                 todayServices: todayList
             })
@@ -148,7 +148,49 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
         })
 
         return () => unsubscribe()
-    }, [barberId])
+    }, [barberId, targetDateStr])
+
+    const handleSendReport = () => {
+        const telefone = "5521971577221"
+        const dataHoje = new Date().toLocaleDateString('pt-BR')
+
+        let mensagem = `📊 *Relatório Diário - ${barberName}*\n`
+        mensagem += `📅 Data: ${dataHoje}\n\n`
+
+        mensagem += `✂️ *Serviços Realizados:*\n`
+
+        if (stats.todayServices.length === 0) {
+            mensagem += `_Nenhum serviço registrado hoje._\n`
+        } else {
+            // Ordenar por horário antes de enviar
+            const sortedServices = [...stats.todayServices].sort((a, b) => {
+                return (a.data.seconds - b.data.seconds)
+            })
+
+            sortedServices.forEach(item => {
+                const horario = item.dateStr
+                const desc = item.servico_descricao
+                const valor = item.valor_bruto > 0 ? `R$ ${item.valor_bruto.toFixed(2)}` : ''
+                const pgto = item.forma_pagamento
+                const isDebit = item.comissao_barbeiro < 0
+
+                let linha = `${horario} - ${desc}`
+                if (valor) linha += ` (${valor})`
+                linha += ` - ${pgto}`
+                if (isDebit) linha = `[DÉBITO] ${linha}`
+
+                mensagem += `• ${linha}\n`
+            })
+        }
+
+        mensagem += `\n💰 *Resumo do Dia:*\n`
+        mensagem += `✅ Qtd Serviços: ${stats.todayCount}\n`
+        mensagem += `💵 Total Bruto: R$ ${stats.todayValue.toFixed(2)}\n`
+        mensagem += `🤑 Minha Comissão: R$ ${stats.todayCommission.toFixed(2)}\n`
+
+        const url = `https://wa.me/${telefone}?text=${encodeURIComponent(mensagem)}`
+        window.open(url, '_blank')
+    }
 
     const handleAdvance = async () => {
         if (!advanceValue || parseFloat(advanceValue) <= 0) return alert("Digite um valor válido")
@@ -207,7 +249,7 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
 
     const handleDelete = async (id) => {
         if (!id) return alert("Erro: ID inválido")
-        if (!isAdmin) return alert("Sem permissão para excluir.")
+        // if (!isAdmin) return alert("Sem permissão para excluir.") // [MOD] Allowed for barbers too
         setDeleteConfirmation(id)
     }
 
@@ -253,11 +295,13 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
     }
 
     const remainingWorkDays = getRemainingWorkDays()
-    const currentMonthCommission = stats.monthCommission
+    // [FIX] Usar monthProduction (produção bruta) para meta, não monthCommission (saldo líquido)
+    // Assim vales não afetam o progresso da meta
+    const currentMonthProduction = stats.monthProduction
 
     // logic: If we already exceeded target, goal is 0. 
     // Else divide remaining balance by remaining days.
-    const remainingBalance = Math.max(0, MONTHLY_TARGET - currentMonthCommission)
+    const remainingBalance = Math.max(0, MONTHLY_TARGET - currentMonthProduction)
     const dailyGoal = remainingWorkDays > 0 ? (remainingBalance / remainingWorkDays) : 0
 
     // Services needed to hit TODAY's goal
@@ -282,7 +326,14 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
                     <TrendingUp size={20} className="text-cyan-500" />
                     Meu Painel
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
+                    <button
+                        onClick={handleSendReport}
+                        className="text-xs bg-green-900/40 hover:bg-green-800/60 text-green-400 border border-green-800 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
+                        title="Enviar Relatório do Dia"
+                    >
+                        <MessageCircle size={14} /> Relatório Dia
+                    </button>
                     <button
                         onClick={() => setShowAdvanceModal(true)}
                         className="text-xs bg-gray-800 hover:bg-gray-700 text-yellow-500 border border-yellow-900/30 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
@@ -335,64 +386,164 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
             )}
 
 
-            <div className={`relative overflow-hidden rounded-2xl p-4 sm:p-6 shadow-xl transition-all ${isGoalMet ? 'bg-gradient-to-br from-green-900 via-green-800 to-gray-900 border border-green-500' : 'bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 border border-gray-800'}`}>
+            {/* ========== NOVO WIDGET DE METAS REDESENHADO ========== */}
+            <div className="space-y-4">
 
-                {/* Background Glow Effect */}
-                {isGoalMet && <div className="absolute inset-0 bg-green-500/10 blur-3xl animate-pulse" />}
+                {/* Header com Meta Mensal */}
+                <div className="bg-gradient-to-r from-cyan-900/30 via-gray-900 to-gray-950 rounded-2xl p-4 border border-cyan-500/20">
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                            <div className="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                                <TrendingUp size={20} className="text-cyan-400" />
+                            </div>
+                            <div>
+                                <h2 className="text-white font-bold text-lg">Meta Mensal</h2>
+                                <p className="text-cyan-400 text-xs font-medium">Objetivo: R$ 4.000,00</p>
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <span className="text-2xl sm:text-3xl font-black text-white">
+                                {Math.min(100, Math.floor((currentMonthProduction / MONTHLY_TARGET) * 100))}%
+                            </span>
+                            <p className="text-xs text-gray-500">concluído</p>
+                        </div>
+                    </div>
 
-                <div className="relative z-10">
-                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-4">
-                        <div>
-                            <h2 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-1">
-                                {isGoalMet ? '🔥 Meta Batida!' : (isOffDay ? `Bom Descanso (${todayStr})` : `Meta do Dia (${todayStr})`)}
-                            </h2>
-                            <div className="flex items-baseline gap-2">
-                                <span className={`text-2xl sm:text-4xl font-black ${isGoalMet ? 'text-green-400' : (isOffDay ? 'text-gray-500' : 'text-white')}`}>
-                                    {isOffDay ? 'OFF' : dailyGoal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                </span>
-                                {remainingBalance > 0 && !isOffDay && (
-                                    <span className="text-xs text-gray-500">
-                                        (Faltam {remainingBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} para a meta)
-                                    </span>
+                    {/* Barra de Progresso Mensal */}
+                    <div className="relative">
+                        <div className="h-6 bg-gray-950 rounded-full overflow-hidden border border-gray-800">
+                            <div
+                                className={`h-full transition-all duration-1000 ease-out relative ${currentMonthProduction >= MONTHLY_TARGET
+                                    ? 'bg-gradient-to-r from-green-600 to-green-400 shadow-[0_0_20px_rgba(34,197,94,0.5)]'
+                                    : 'bg-gradient-to-r from-cyan-700 to-cyan-500'
+                                    }`}
+                                style={{ width: `${Math.min(100, (currentMonthProduction / MONTHLY_TARGET) * 100)}%` }}
+                            >
+                                {currentMonthProduction >= MONTHLY_TARGET && (
+                                    <div className="absolute inset-0 bg-white/20 animate-pulse" />
                                 )}
                             </div>
                         </div>
-                        <div className="sm:text-right">
-                            <div className="bg-gray-950/50 rounded-lg px-3 py-1 border border-white/10 backdrop-blur-sm inline-block">
-                                <span className="text-xs text-gray-400 block">Esforço Estimado</span>
-                                <span className="font-bold text-white text-lg">
-                                    {isOffDay ? '-' : `~${servicesNeeded}`} <span className="text-xs font-normal text-gray-400">cortes</span>
-                                </span>
+
+                        {/* Marcadores de meta */}
+                        <div className="flex justify-between mt-2 text-xs">
+                            <span className="text-gray-500">R$ 0</span>
+                            <div className="flex gap-4 sm:gap-8">
+                                <span className={`${currentMonthProduction >= 1000 ? 'text-cyan-400' : 'text-gray-600'}`}>1k</span>
+                                <span className={`${currentMonthProduction >= 2000 ? 'text-cyan-400' : 'text-gray-600'}`}>2k</span>
+                                <span className={`${currentMonthProduction >= 3000 ? 'text-cyan-400' : 'text-gray-600'}`}>3k</span>
                             </div>
+                            <span className={`font-bold ${currentMonthProduction >= MONTHLY_TARGET ? 'text-green-400' : 'text-cyan-500'}`}>
+                                🎯 R$ 4k
+                            </span>
                         </div>
                     </div>
 
-                    {/* Message */}
-                    <p className={`text-sm mb-4 font-medium ${isGoalMet ? 'text-green-200' : 'text-gray-400'}`}>
-                        {isGoalMet
-                            ? "Parabéns! Você atingiu o objetivo de hoje. O que vier agora é lucro extra! 🚀"
-                            : `Meta recalibrada baseada nos seus ${remainingWorkDays} dias úteis restantes.`
-                        }
-                    </p>
-
-                    {/* Progress Bar */}
-                    <div className="h-4 bg-gray-950 rounded-full overflow-hidden border border-white/5 relative">
-                        <div
-                            className={`h-full transition-all duration-1000 ease-out ${isGoalMet ? 'bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.5)]' : 'bg-cyan-600'}`}
-                            style={{ width: `${goalProgress}%` }}
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-md">
-                            {Math.floor(goalProgress)}%
+                    {/* Stats do Mês */}
+                    <div className="grid grid-cols-2 gap-3 mt-4">
+                        <div className="bg-gray-950/50 rounded-xl p-3 border border-gray-800">
+                            <p className="text-xs text-gray-500 mb-1">Você já fez</p>
+                            <p className="text-xl font-bold text-cyan-400">
+                                {currentMonthProduction.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </p>
+                        </div>
+                        <div className="bg-gray-950/50 rounded-xl p-3 border border-gray-800">
+                            <p className="text-xs text-gray-500 mb-1">Falta para meta</p>
+                            <p className={`text-xl font-bold ${remainingBalance <= 0 ? 'text-green-400' : 'text-orange-400'}`}>
+                                {remainingBalance <= 0 ? '🏆 BATIDA!' : remainingBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </p>
                         </div>
                     </div>
+                </div>
 
-                    {/* Tiny stats below bar */}
-                    <div className="flex flex-col sm:flex-row justify-between mt-2 text-xs text-gray-500 font-medium gap-1">
-                        <span>Hoje: {todayProduction.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                        <span>Falta Hoje: {Math.max(0, dailyGoal - todayProduction).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                {/* Card Meta Diária */}
+                <div className={`relative overflow-hidden rounded-2xl p-4 border transition-all ${isGoalMet
+                    ? 'bg-gradient-to-br from-green-900/50 to-green-950 border-green-500/50'
+                    : isOffDay
+                        ? 'bg-gray-900/50 border-gray-800'
+                        : 'bg-gray-900 border-gray-800'
+                    }`}>
+
+                    {/* Glow Effect quando meta batida */}
+                    {isGoalMet && <div className="absolute inset-0 bg-green-500/10 blur-3xl animate-pulse" />}
+
+                    <div className="relative z-10">
+                        <div className="flex items-center justify-between mb-3">
+                            <div>
+                                <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">
+                                    {isOffDay ? '😴 Dia de Folga' : `📅 ${todayStr}`}
+                                </p>
+                                <h3 className="text-white font-bold text-base">
+                                    {isGoalMet ? '🔥 Meta do Dia Batida!' : 'Meta de Hoje'}
+                                </h3>
+                            </div>
+                            {!isOffDay && (
+                                <div className="bg-gray-950/70 rounded-lg px-3 py-2 border border-gray-700 text-center">
+                                    <span className="text-xs text-gray-400 block">~cortes</span>
+                                    <span className="font-bold text-white text-xl">{servicesNeeded}</span>
+                                </div>
+                            )}
+                        </div>
+
+                        {!isOffDay ? (
+                            <>
+                                {/* Meta Diária Value */}
+                                <div className="flex items-end gap-3 mb-4">
+                                    <span className={`text-3xl sm:text-4xl font-black ${isGoalMet ? 'text-green-400' : 'text-white'}`}>
+                                        {dailyGoal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </span>
+                                    <span className="text-sm text-gray-500 pb-1">por dia</span>
+                                </div>
+
+                                {/* Barra de Progresso Diária */}
+                                <div className="relative mb-2">
+                                    <div className="h-5 bg-gray-950 rounded-full overflow-hidden border border-gray-700">
+                                        <div
+                                            className={`h-full transition-all duration-700 ease-out ${isGoalMet
+                                                ? 'bg-gradient-to-r from-green-600 to-green-400 shadow-[0_0_12px_rgba(34,197,94,0.5)]'
+                                                : 'bg-gradient-to-r from-purple-600 to-pink-500'
+                                                }`}
+                                            style={{ width: `${goalProgress}%` }}
+                                        />
+                                        <div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-white drop-shadow-lg">
+                                            {Math.floor(goalProgress)}%
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Stats abaixo da barra */}
+                                <div className="flex justify-between text-xs font-medium">
+                                    <span className="text-purple-400">
+                                        Feito: {todayProduction.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </span>
+                                    <span className={isGoalMet ? 'text-green-400' : 'text-gray-500'}>
+                                        {isGoalMet
+                                            ? `+${(todayProduction - dailyGoal).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} extra!`
+                                            : `Falta: ${Math.max(0, dailyGoal - todayProduction).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`
+                                        }
+                                    </span>
+                                </div>
+
+                                {/* Mensagem motivacional */}
+                                <p className={`text-xs mt-3 p-2 rounded-lg text-center ${isGoalMet
+                                    ? 'bg-green-900/30 text-green-300 border border-green-800'
+                                    : 'bg-gray-800/50 text-gray-400 border border-gray-700'
+                                    }`}>
+                                    {isGoalMet
+                                        ? "🚀 Excelente! Cada corte agora é lucro extra!"
+                                        : `Restam ${remainingWorkDays} dias úteis no mês. Bora!`
+                                    }
+                                </p>
+                            </>
+                        ) : (
+                            <div className="text-center py-4">
+                                <p className="text-gray-500 text-sm">Descanse bem! Amanhã é dia de batalha 💪</p>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
+            {/* ========== FIM WIDGET DE METAS ========== */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6 mt-4">
                 <div className="bg-gray-950 p-4 rounded-xl border border-gray-800">
                     <p className="text-xs text-gray-500 mb-1">Comissão Hoje ({isAdmin ? 'Líquido' : 'Total'})</p>
@@ -425,14 +576,14 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
             <div className="bg-gray-950 rounded-xl border border-gray-800 overflow-hidden">
                 <div className="px-4 py-3 border-b border-gray-800 bg-gray-900/50 flex justify-between items-center">
                     <span className="text-sm font-medium text-gray-300 flex items-center gap-2">
-                        <Clock size={14} /> Atividades de Hoje
+                        <Clock size={14} /> Atividades de {new Date(targetDateStr + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
                     </span>
                     <span className="text-xs text-gray-500">Total Bruto: R$ {stats.todayValue.toFixed(2)}</span>
                 </div>
 
                 {stats.todayServices.length === 0 ? (
                     <div className="p-6 text-center text-gray-600 text-sm">
-                        Nenhum serviço lançado hoje.
+                        Nenhum serviço lançado nesta data.
                     </div>
                 ) : (
                     <div className="divide-y divide-gray-800">
@@ -465,7 +616,7 @@ export function BarberDailyView({ barberId, barberName, isAdmin }) {
                                                 {item.comissao_barbeiro >= 0 ? '+' : ''} R$ {item.comissao_barbeiro.toFixed(2)}
                                             </div>
                                         </div>
-                                        {isAdmin && (
+                                        {true && (
                                             <button
                                                 onClick={() => handleDelete(item.id)}
                                                 className="text-red-500 hover:text-red-300 p-2 rounded-lg hover:bg-red-900/20 transition-colors"

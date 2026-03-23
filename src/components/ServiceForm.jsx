@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { db, collection, addDoc, serverTimestamp, auth, signOut } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
 import { Save, Calendar, User, Scissors, DollarSign } from 'lucide-react'
@@ -23,6 +23,7 @@ export function ServiceForm() {
         cliente_nome: ''
     })
     const [loading, setLoading] = useState(false)
+    const isSubmittingRef = useRef(false) // [NEW] Lock
 
     // Derived active barber (who we are launching for)
     const activeBarber = BARBERS.find(b => b.id === selectedBarberId) || loggedInBarber
@@ -34,8 +35,11 @@ export function ServiceForm() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (isSubmittingRef.current) return // [NEW] Prevent double click
+
         if (!formData.valor_bruto) return alert('Preencha o valor do serviço')
 
+        isSubmittingRef.current = true // [NEW] Lock
         setLoading(true)
         try {
             if (!activeBarber) throw new Error('Nenhum barbeiro selecionado.')
@@ -64,10 +68,13 @@ export function ServiceForm() {
                     return alert('Não é permitido lançamentos futuros.')
                 }
 
-                // If manual date IS NOT today, use 12:00. If it IS today, use current time (default above)
+                // If manual date IS NOT today, use 12:00 LOCAL TIME
                 if (formData.data_manual < todayStr) {
                     if (!isAdmin) return alert('Apenas administradores podem fazer lançamentos retroativos.')
-                    entryDataField = Timestamp.fromDate(new Date(formData.data_manual + 'T12:00:00'))
+                    // Criar data com horário local explícito (meio-dia para evitar problemas de fuso)
+                    const [year, month, day] = formData.data_manual.split('-').map(Number)
+                    const manualDate = new Date(year, month - 1, day, 12, 0, 0)
+                    entryDataField = Timestamp.fromDate(manualDate)
                 }
             }
 
@@ -92,6 +99,7 @@ export function ServiceForm() {
             alert('Erro ao salvar: ' + e.message)
         } finally {
             setLoading(false)
+            isSubmittingRef.current = false // [NEW] Unlock
         }
     }
 
@@ -227,7 +235,7 @@ export function ServiceForm() {
             </form>
 
             {/* Component SAFE MODE enabled */}
-            {activeBarber && <BarberDailyView key={activeBarber.id} barberId={activeBarber.id} barberName={activeBarber.name} isAdmin={isAdmin} />}
+            {activeBarber && <BarberDailyView key={activeBarber.id} barberId={activeBarber.id} barberName={activeBarber.name} isAdmin={isAdmin} selectedDate={formData.data_manual || today} />}
 
             {/* Ranking de Barbeiros - visível para todos */}
             <div className="mt-6">

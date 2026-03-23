@@ -7,6 +7,7 @@ import { ServiceForm } from './components/ServiceForm'
 import { ReportsDashboard } from './components/ReportsDashboard'
 import { DailyClosure } from './components/DailyClosure'
 import { FinancialDashboard } from './components/FinancialDashboard'
+import { DebugData } from './components/DebugData'
 
 import { BARBERS } from './data/barbers'
 
@@ -45,6 +46,7 @@ function App() {
               <Link to="/reports" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><BarChart3 size={18} /> <span className="hidden md:inline">Relatórios</span></Link>
               <Link to="/financeiro" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><Wallet size={18} /> <span className="hidden md:inline">Financeiro</span></Link>
               <Link to="/fechamento" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><LogOut size={18} /> <span className="hidden md:inline">Fechamento</span></Link>
+              <Link to="/debug" className="flex items-center gap-2 text-sm font-medium text-red-500 hover:text-red-400 border border-red-900/50 px-2 rounded"><span className="hidden md:inline">Reparo (Debug)</span></Link>
             </>
           )}
 
@@ -59,6 +61,7 @@ function App() {
               <Route path="/reports" element={<ReportsDashboard />} />
               <Route path="/fechamento" element={<DailyClosure />} />
               <Route path="/financeiro" element={<FinancialDashboard />} />
+              <Route path="/debug" element={<DebugData />} />
             </>
           ) : (
             <Route path="*" element={<div className="text-center p-10 text-gray-500">Acesso Restrito</div>} />
