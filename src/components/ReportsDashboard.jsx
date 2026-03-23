@@ -615,6 +615,9 @@ export function ReportsDashboard() {
                                 })}
                             </div>
 
+                            {/* All Barbers Breakdown */}
+                            <AllBarbersCard byBarber={analytics.byBarber} />
+
                             {/* Payment Breakdown */}
                             <PaymentBreakdown byPayment={analytics.byPayment} total={analytics.paymentTotal} />
 
@@ -1093,6 +1096,61 @@ function PaymentBreakdown({ byPayment, total }) {
                     )
                 })}
                 {sorted.length === 0 && <p className="text-sm text-gray-500">Sem dados de pagamento</p>}
+            </div>
+        </div>
+    )
+}
+
+function AllBarbersCard({ byBarber }) {
+    const barbers = Object.entries(byBarber)
+        .map(([id, info]) => {
+            const barberData = BARBERS.find(b => b.id === id)
+            const storeName = barberData ? (STORES.find(s => s.id === barberData.store)?.name || barberData.store) : ''
+            return { id, storeName, ...info }
+        })
+        .sort((a, b) => b.gross - a.gross)
+
+    if (barbers.length === 0) return null
+
+    return (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-lg">
+            <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
+                <Users size={18} className="text-cyan-500" /> Todos os Barbeiros
+            </h3>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                    <thead className="text-gray-500 border-b border-gray-800 text-xs">
+                        <tr>
+                            <th className="py-2 pr-3 font-medium">Barbeiro</th>
+                            <th className="py-2 px-2 font-medium text-center">Loja</th>
+                            <th className="py-2 px-2 font-medium text-right">Faturamento</th>
+                            <th className="py-2 px-2 font-medium text-right">Com. Receita</th>
+                            <th className="py-2 px-2 font-medium text-right">Com. Assin/Vale</th>
+                            <th className="py-2 px-2 font-medium text-right">Com. Total</th>
+                            <th className="py-2 px-2 font-medium text-center">Atend.</th>
+                            <th className="py-2 pl-2 font-medium text-right">Ticket Médio</th>
+                        </tr>
+                    </thead>
+                    <tbody className="text-gray-300 divide-y divide-gray-800/50">
+                        {barbers.map((b, i) => (
+                            <tr key={b.id} className="hover:bg-gray-800/30 transition-colors">
+                                <td className="py-2.5 pr-3 flex items-center gap-2">
+                                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${i === 0 ? 'bg-yellow-900/50 text-yellow-400' : 'bg-gray-800 text-gray-500'}`}>{i + 1}</span>
+                                    <span className="font-medium truncate">{b.name}</span>
+                                </td>
+                                <td className="py-2.5 px-2 text-center">
+                                    <span className="text-[10px] bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded">{b.storeName}</span>
+                                </td>
+                                <td className="py-2.5 px-2 text-right font-semibold text-cyan-400">{fmt(b.gross)}</td>
+                                <td className="py-2.5 px-2 text-right text-green-400">{fmt(b.commissionRevenue)}</td>
+                                <td className="py-2.5 px-2 text-right text-purple-400">{fmt(b.commissionNonCash)}</td>
+                                <td className="py-2.5 px-2 text-right font-semibold text-gray-200">{fmt(b.commission)}</td>
+                                <td className="py-2.5 px-2 text-center text-gray-400">{b.serviceCount}</td>
+                                <td className="py-2.5 pl-2 text-right text-yellow-400">{fmt(b.serviceCount > 0 ? b.gross / b.serviceCount : 0)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
             </div>
         </div>
     )
