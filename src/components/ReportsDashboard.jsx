@@ -185,6 +185,9 @@ export function ReportsDashboard() {
         const gross = revenueItems.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
         // Comissão = de TODOS os serviços (incluindo assinante/vale presente, excluindo fechamento/adiantamento)
         const commission = services.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        // Comissão separada: serviços com receita (din/pix/cartão) vs assinante/vale presente
+        const commissionRevenue = revenueItems.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        const commissionNonCash = services.filter(d => isNonCashRevenue(d)).reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
         // Atendimentos = todos os serviços (incluindo assinante/vale presente)
         const serviceCount = services.length
         const totalCount = data.length
@@ -233,11 +236,17 @@ export function ReportsDashboard() {
         data.forEach(d => {
             const bid = d.barbeiro_id || 'unknown'
             const bname = d.barbeiro_nome || 'Desconhecido'
-            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, serviceCount: 0, gross: 0, commission: 0, services: {} }
+            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, serviceCount: 0, gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, services: {} }
             byBarber[bid].count++
             if (isService(d)) {
                 byBarber[bid].serviceCount++
-                byBarber[bid].commission += parseFloat(d.comissao_barbeiro) || 0
+                const com = parseFloat(d.comissao_barbeiro) || 0
+                byBarber[bid].commission += com
+                if (isNonCashRevenue(d)) {
+                    byBarber[bid].commissionNonCash += com
+                } else {
+                    byBarber[bid].commissionRevenue += com
+                }
                 const svc = d.servico_descricao || 'Outros'
                 if (!byBarber[bid].services[svc]) byBarber[bid].services[svc] = 0
                 byBarber[bid].services[svc]++
@@ -278,7 +287,7 @@ export function ReportsDashboard() {
         const peakHour = Object.entries(byHour).sort((a, b) => b[1] - a[1])[0]
 
         return {
-            gross, commission, totalCount, serviceCount, avgTicket, paymentTotal,
+            gross, commission, commissionRevenue, commissionNonCash, totalCount, serviceCount, avgTicket, paymentTotal,
             byPayment, topServices, byDay, byBarber, byStore,
             subCount: subData.length, subCommissionCost, internalRevenue,
             bestDay, peakHour
@@ -569,9 +578,9 @@ export function ReportsDashboard() {
                     {/* General Metrics */}
                     {analytics && (
                         <>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                                 <MetricCard label="Faturamento Bruto" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
-                                <MetricCard label="Comissões Totais" value={fmt(analytics.commission)} icon={Users} color="green" />
+                                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="green" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
                                 <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
                             </div>
@@ -807,9 +816,9 @@ function BarberDetailView({ barber, analytics, data }) {
             </div>
 
             {/* Personal Metrics */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                 <MetricCard label="Faturamento" value={fmt(barberData.gross)} icon={DollarSign} color="cyan" />
-                <MetricCard label="Comissão Gerada" value={fmt(barberData.commission)} icon={Award} color="green" />
+                <MetricCard label="Comissão (Total)" value={fmt(barberData.commission)} icon={Award} color="green" sub={`Receita: ${fmt(barberData.commissionRevenue)} | Assin/Vale: ${fmt(barberData.commissionNonCash)}`} />
                 <MetricCard label="Atendimentos" value={barberData.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(avg(barberData.gross, barberData.serviceCount))} icon={TrendingUp} color="yellow" />
             </div>
@@ -911,7 +920,7 @@ function StoreDetailView({ store, analytics, data }) {
             {/* Store Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <MetricCard label="Faturamento" value={fmt(analytics.gross)} icon={DollarSign} color={color} />
-                <MetricCard label="Comissões" value={fmt(analytics.commission)} icon={Users} color="green" />
+                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="green" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
                 <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
             </div>
@@ -1008,7 +1017,7 @@ function StoreDetailView({ store, analytics, data }) {
 // REUSABLE COMPONENTS
 // =============================================
 
-function MetricCard({ label, value, icon: Icon, color }) {
+function MetricCard({ label, value, icon: Icon, color, sub }) {
     const colorMap = {
         cyan: 'text-cyan-500',
         green: 'text-green-500',
@@ -1024,6 +1033,7 @@ function MetricCard({ label, value, icon: Icon, color }) {
             </div>
             <h3 className="text-gray-400 text-xs font-medium">{label}</h3>
             <p className="text-xl sm:text-2xl font-bold text-gray-100 mt-1">{value}</p>
+            {sub && <p className="text-[10px] text-gray-500 mt-1.5 leading-relaxed">{sub}</p>}
         </div>
     )
 }
