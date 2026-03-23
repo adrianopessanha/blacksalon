@@ -1062,7 +1062,7 @@ function PaymentBreakdown({ byPayment, total }) {
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <span className="text-sm font-semibold text-gray-200">{fmt(info.total)}</span>
-                                    <span className="text-xs text-gray-500 w-[40px] text-right">{pct(info.total, gross)}</span>
+                                    <span className="text-xs text-gray-500 w-[40px] text-right">{pct(info.total, total)}</span>
                                 </div>
                             </div>
                             <div className="bg-gray-800 rounded-full h-1.5 overflow-hidden">
