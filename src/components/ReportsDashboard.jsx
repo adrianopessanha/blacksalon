@@ -268,10 +268,18 @@ export function ReportsDashboard() {
         const byStore = {}
         rawData.forEach(d => {
             const store = getStore(d)
-            if (!byStore[store]) byStore[store] = { gross: 0, commission: 0, count: 0 }
+            if (!byStore[store]) byStore[store] = { gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, count: 0 }
             if (isRevenue(d)) byStore[store].gross += parseFloat(d.valor_bruto) || 0
-            if (isService(d)) byStore[store].commission += parseFloat(d.comissao_barbeiro) || 0
-            if (isService(d)) byStore[store].count++
+            if (isService(d)) {
+                const com = parseFloat(d.comissao_barbeiro) || 0
+                byStore[store].commission += com
+                if (isNonCashRevenue(d)) {
+                    byStore[store].commissionNonCash += com
+                } else {
+                    byStore[store].commissionRevenue += com
+                }
+                byStore[store].count++
+            }
         })
 
         // Best day
@@ -600,6 +608,7 @@ export function ReportsDashboard() {
                                             </div>
                                             <div className="text-2xl font-bold text-gray-100">{fmt(s.gross)}</div>
                                             <div className="text-xs text-gray-500 mt-1">Comissões: {fmt(s.commission)}</div>
+                                            <div className="text-[10px] text-gray-600 mt-0.5">Receita: {fmt(s.commissionRevenue)} | Assin/Vale: {fmt(s.commissionNonCash)}</div>
                                         </div>
                                     )
                                 })}
