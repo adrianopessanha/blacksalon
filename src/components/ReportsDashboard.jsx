@@ -97,7 +97,7 @@ export function ReportsDashboard() {
 
                 const getStore = (d) => {
                     const barber = BARBERS.find(b => b.id === d.barbeiro_id)
-                    return d.loja_id || barber?.store || 'unknown'
+                    return barber?.store || d.loja_id || 'unknown'
                 }
 
                 const loja01Month = raw.filter(d => getStore(d) === 'loja-01')
@@ -140,7 +140,8 @@ export function ReportsDashboard() {
 
             const filtered = raw.filter(d => {
                 const barber = BARBERS.find(b => b.id === d.barbeiro_id)
-                const store = d.loja_id || barber?.store || 'unknown'
+                // Usa a loja cadastrada do barbeiro como fonte de verdade
+                const store = barber?.store || d.loja_id || 'unknown'
                 const matchBarber = filters.barberId === 'all' || d.barbeiro_id === filters.barberId
                 const matchStore = filters.storeId === 'all' || store === filters.storeId
                 return matchBarber && matchStore
@@ -230,7 +231,7 @@ export function ReportsDashboard() {
         // Store breakdown
         const getStore = (d) => {
             const barber = BARBERS.find(b => b.id === d.barbeiro_id)
-            return d.loja_id || barber?.store || 'unknown'
+            return barber?.store || d.loja_id || 'unknown'
         }
         const byStore = {}
         rawData.forEach(d => {
