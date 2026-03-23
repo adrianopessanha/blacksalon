@@ -607,7 +607,8 @@ export function ReportsDashboard() {
                                                 <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded-full">{s.count} atend.</span>
                                             </div>
                                             <div className="text-2xl font-bold text-gray-100">{fmt(s.gross)}</div>
-                                            <div className="text-xs text-gray-500 mt-1">Comissões: {fmt(s.commission)}</div>
+                                            <div className="text-xs text-gray-500 mt-1">Ticket Médio: {fmt(s.count > 0 ? s.gross / s.count : 0)}</div>
+                                            <div className="text-xs text-gray-500 mt-0.5">Comissões: {fmt(s.commission)}</div>
                                             <div className="text-[10px] text-gray-600 mt-0.5">Receita: {fmt(s.commissionRevenue)} | Assin/Vale: {fmt(s.commissionNonCash)}</div>
                                         </div>
                                     )
