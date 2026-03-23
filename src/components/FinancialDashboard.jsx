@@ -270,14 +270,13 @@ export function FinancialDashboard() {
                 return pm.includes('débit') || pm.includes('debit') || pm === 'débito' || pm === 'debito'
             }).reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
-            // Crédito (D+30 - a receber)
+            // Crédito (antecipação já embutida no desconto - cai na conta na hora)
             const credito = revenueItems.filter(d => {
                 const pm = d.forma_pagamento?.toLowerCase() || ''
                 return pm.includes('crédit') || pm.includes('credit') || pm === 'crédito' || pm === 'credito'
             }).reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
-            const entradasImediatas = dinheiro + pix + debito
-            const totalEntradas = entradasImediatas + credito
+            const totalEntradas = dinheiro + pix + debito + credito
 
             // Saídas do mês (despesas pagas)
             const storeFinance = storeFilter === 'consolidado'
@@ -287,7 +286,7 @@ export function FinancialDashboard() {
                 .filter(d => d.status === 'pago' && d.finance_category !== 'receita_diversa')
                 .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
 
-            return { dinheiro, pix, debito, credito, entradasImediatas, totalEntradas, despesasPagas }
+            return { dinheiro, pix, debito, credito, totalEntradas, despesasPagas }
         }
 
         return {
@@ -528,21 +527,21 @@ export function FinancialDashboard() {
                         <CashCard label="Dinheiro" value={activeCash.dinheiro} icon={Banknote} color="green" />
                         <CashCard label="Pix" value={activeCash.pix} icon={Smartphone} color="cyan" />
                         <CashCard label="Débito" value={activeCash.debito} icon={CreditCard} color="orange" />
-                        <CashCard label="Crédito (a receber)" value={activeCash.credito} icon={CreditCard} color="yellow" />
+                        <CashCard label="Crédito" value={activeCash.credito} icon={CreditCard} color="yellow" />
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
                         <div className="bg-green-900/20 border border-green-800/50 rounded-xl p-4 text-center">
                             <span className="text-xs text-green-500 block mb-1">Entradas Imediatas</span>
-                            <span className="text-xl font-bold text-green-400">{fmt(activeCash.entradasImediatas)}</span>
+                            <span className="text-xl font-bold text-green-400">{fmt(activeCash.totalEntradas)}</span>
                         </div>
                         <div className="bg-red-900/20 border border-red-800/50 rounded-xl p-4 text-center">
                             <span className="text-xs text-red-500 block mb-1">Despesas Pagas</span>
                             <span className="text-xl font-bold text-red-400">{fmt(activeCash.despesasPagas)}</span>
                         </div>
-                        <div className={`border rounded-xl p-4 text-center ${(activeCash.entradasImediatas - activeCash.despesasPagas) >= 0 ? 'bg-cyan-900/20 border-cyan-800/50' : 'bg-red-900/20 border-red-800/50'}`}>
+                        <div className={`border rounded-xl p-4 text-center ${(activeCash.totalEntradas - activeCash.despesasPagas) >= 0 ? 'bg-cyan-900/20 border-cyan-800/50' : 'bg-red-900/20 border-red-800/50'}`}>
                             <span className="text-xs text-gray-400 block mb-1">Saldo de Caixa</span>
-                            <span className={`text-xl font-bold ${(activeCash.entradasImediatas - activeCash.despesasPagas) >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>
-                                {fmt(activeCash.entradasImediatas - activeCash.despesasPagas)}
+                            <span className={`text-xl font-bold ${(activeCash.totalEntradas - activeCash.despesasPagas) >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>
+                                {fmt(activeCash.totalEntradas - activeCash.despesasPagas)}
                             </span>
                         </div>
                     </div>
