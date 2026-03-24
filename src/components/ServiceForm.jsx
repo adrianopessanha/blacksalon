@@ -78,7 +78,8 @@ export function ServiceForm() {
         if (newPresets.length > 0) {
             const desc = newPresets.map(p => p.desc).join(' + ')
             const total = newPresets.reduce((sum, p) => sum + p.value, 0)
-            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico' })
+            const hasPlano = newPresets.some(p => p.label.includes('plano'))
+            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico', forma_pagamento: hasPlano ? 'Assinante' : formData.forma_pagamento })
         } else {
             setFormData({ ...formData, servico_descricao: '', valor_bruto: '' })
         }
@@ -357,19 +358,30 @@ export function ServiceForm() {
                             {/* Payment Buttons */}
                             <div>
                                 <label className="block text-xs text-gray-500 mb-2 uppercase tracking-wider font-semibold">Pagamento</label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => (
-                                        <button type="button" key={pm}
-                                            onClick={() => setFormData({ ...formData, forma_pagamento: pm })}
-                                            className={`text-sm py-2.5 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm
-                                                ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
-                                                : 'bg-gray-950 border-gray-800 text-gray-400'
-                                                }`}
-                                        >
-                                            {pm}
-                                        </button>
-                                    ))}
-                                </div>
+                                {(() => {
+                                    const isPlano = selectedPresets.some(p => p.label.includes('plano'))
+                                    return (
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
+                                                const disabled = isPlano && pm !== 'Assinante'
+                                                return (
+                                                    <button type="button" key={pm}
+                                                        onClick={() => !disabled && setFormData({ ...formData, forma_pagamento: pm })}
+                                                        disabled={disabled}
+                                                        className={`text-sm py-2.5 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm
+                                                            ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
+                                                            : disabled
+                                                                ? 'bg-gray-950 border-gray-800 text-gray-700 cursor-not-allowed opacity-40'
+                                                                : 'bg-gray-950 border-gray-800 text-gray-400'
+                                                            }`}
+                                                    >
+                                                        {pm}
+                                                    </button>
+                                                )
+                                            })}
+                                        </div>
+                                    )
+                                })()}
                             </div>
 
                             {/* Date (admin only) */}
