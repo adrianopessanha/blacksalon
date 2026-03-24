@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { db, collection, query, where, addDoc, deleteDoc, updateDoc, doc, serverTimestamp, onSnapshot } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
-import { DollarSign, TrendingUp, TrendingDown, Wallet, Calendar, Copy, Trash2, PlusCircle, CheckCircle, Clock, Download, Store, CreditCard, Banknote, Smartphone, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Minus, Plus, Equal } from 'lucide-react'
+import { DollarSign, TrendingUp, TrendingDown, Wallet, Calendar, Copy, Trash2, PlusCircle, CheckCircle, Clock, Download, Store, CreditCard, Banknote, Smartphone, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Minus, Plus, Equal, Pencil, X, Check } from 'lucide-react'
 import { BARBERS, STORES } from '../data/barbers'
 
 // ==========================================
@@ -65,6 +65,8 @@ export function FinancialDashboard() {
     const [processing, setProcessing] = useState(false)
     const [deleteId, setDeleteId] = useState(null)
     const [deleteCollection, setDeleteCollection] = useState('financeiro')
+    const [editingId, setEditingId] = useState(null)
+    const [editData, setEditData] = useState({})
 
     // Form
     const [newEntry, setNewEntry] = useState({
@@ -387,6 +389,49 @@ export function FinancialDashboard() {
         }
     }
 
+    const startEdit = (item) => {
+        setEditingId(item.id)
+        setEditData({
+            description: item.description || '',
+            amount: (item.amount || item.value || 0).toString(),
+            store_id: item.store_id || 'loja01',
+            finance_category: item.finance_category || 'despesa_operacional',
+            status: item.status || 'pago',
+            date: item.date || '',
+            competence_month: item.competence_month || ''
+        })
+    }
+
+    const cancelEdit = () => {
+        setEditingId(null)
+        setEditData({})
+    }
+
+    const saveEdit = async (id) => {
+        if (!editData.description || !editData.amount) return alert("Preencha descrição e valor.")
+        setProcessing(true)
+        try {
+            const val = parseFloat(editData.amount.toString().replace(',', '.'))
+            if (isNaN(val) || val <= 0) { alert("Valor inválido!"); setProcessing(false); return }
+
+            await updateDoc(doc(db, 'financeiro', id), {
+                description: editData.description,
+                amount: val,
+                store_id: editData.store_id,
+                finance_category: editData.finance_category,
+                status: editData.status,
+                date: editData.date,
+                competence_month: editData.competence_month
+            })
+            setEditingId(null)
+            setEditData({})
+        } catch (e) {
+            alert("Erro: " + e.message)
+        } finally {
+            setProcessing(false)
+        }
+    }
+
     const handleAddMovement = async () => {
         if (!newMovement.description || !newMovement.amount) return alert("Preencha descrição e valor.")
         setProcessingMovement(true)
@@ -702,7 +747,63 @@ export function FinancialDashboard() {
                         <tbody className="divide-y divide-gray-800/50 text-gray-300">
                             {financialData.length === 0 ? (
                                 <tr><td colSpan="8" className="px-4 py-8 text-center text-gray-500">Nenhum lançamento manual neste mês</td></tr>
-                            ) : financialData.map(item => (
+                            ) : financialData.map(item => editingId === item.id ? (
+                                <tr key={item.id} className="bg-cyan-950/20 border-l-2 border-cyan-500">
+                                    <td className="px-2 py-1.5">
+                                        <input type="date" value={editData.date}
+                                            onChange={e => setEditData({ ...editData, date: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500" />
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <input type="month" value={editData.competence_month}
+                                            onChange={e => setEditData({ ...editData, competence_month: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500" />
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <input type="text" value={editData.description}
+                                            onChange={e => setEditData({ ...editData, description: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500" />
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <select value={editData.finance_category}
+                                            onChange={e => setEditData({ ...editData, finance_category: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500">
+                                            {DRE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                        </select>
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <select value={editData.store_id}
+                                            onChange={e => setEditData({ ...editData, store_id: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500">
+                                            {STORE_OPTIONS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                                        </select>
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <input type="text" value={editData.amount}
+                                            onChange={e => setEditData({ ...editData, amount: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-20 text-right outline-none focus:border-cyan-500" />
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <select value={editData.status}
+                                            onChange={e => setEditData({ ...editData, status: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500">
+                                            {STATUS_OPTIONS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                                        </select>
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right">
+                                        <div className="flex items-center justify-end gap-1">
+                                            <button onClick={() => saveEdit(item.id)} disabled={processing}
+                                                className="text-green-400 hover:text-green-300 p-1 rounded hover:bg-green-900/20 disabled:opacity-50">
+                                                <Check size={14} />
+                                            </button>
+                                            <button onClick={cancelEdit}
+                                                className="text-gray-400 hover:text-gray-200 p-1 rounded hover:bg-gray-800">
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ) : (
                                 <tr key={item.id} className="hover:bg-gray-800/30 transition-colors">
                                     <td className="px-4 py-2.5 text-gray-500 text-xs">{item.date ? new Date(item.date + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</td>
                                     <td className="px-4 py-2.5 text-xs">
@@ -726,9 +827,15 @@ export function FinancialDashboard() {
                                         <StatusBadge status={item.status} onClick={() => toggleStatus(item)} />
                                     </td>
                                     <td className="px-4 py-2.5 text-right">
-                                        <button onClick={() => confirmDelete(item.id)} className="text-gray-500 hover:text-red-400 p-1 rounded hover:bg-red-900/10">
-                                            <Trash2 size={14} />
-                                        </button>
+                                        <div className="flex items-center justify-end gap-1">
+                                            <button onClick={() => startEdit(item)}
+                                                className="text-gray-500 hover:text-cyan-400 p-1 rounded hover:bg-cyan-900/10">
+                                                <Pencil size={14} />
+                                            </button>
+                                            <button onClick={() => confirmDelete(item.id)} className="text-gray-500 hover:text-red-400 p-1 rounded hover:bg-red-900/10">
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
