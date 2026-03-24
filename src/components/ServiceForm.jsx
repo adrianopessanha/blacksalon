@@ -39,6 +39,12 @@ export function ServiceForm() {
 
         if (!formData.valor_bruto) return alert('Preencha o valor do serviço')
 
+        // Venda de assinatura/vale presente só aceita pagamento real
+        const PAGAMENTOS_REAIS = ['Dinheiro', 'Pix', 'Crédito', 'Débito']
+        if (['venda_vale', 'venda_assinatura'].includes(formData.tipo) && !PAGAMENTOS_REAIS.includes(formData.forma_pagamento)) {
+            return alert('Venda de Assinatura ou Vale Presente só pode ser feita com pagamento real (Dinheiro, Pix, Crédito ou Débito).')
+        }
+
         isSubmittingRef.current = true // [NEW] Lock
         setLoading(true)
         try {
