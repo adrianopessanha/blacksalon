@@ -53,10 +53,12 @@ export function ServiceForm() {
 
             const base = valor * (1 - fee)
 
-            let commissionRate = 0
-            if (formData.tipo === 'servico') commissionRate = 0.5
-
-            const comissao_barbeiro = base * commissionRate
+            let comissao_barbeiro = 0
+            if (formData.tipo === 'servico') {
+                comissao_barbeiro = base * 0.5
+            } else if (formData.tipo === 'produto') {
+                comissao_barbeiro = 5.00
+            }
 
             const now = new Date()
             const todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')

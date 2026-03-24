@@ -14,6 +14,7 @@ const DRE_CATEGORIES = [
     { id: 'imposto', label: 'Imposto', group: 'impostos' },
     { id: 'despesa_venda', label: 'Despesa de Venda', group: 'despesas_venda' },
     { id: 'despesa_operacional', label: 'Despesa Operacional', group: 'despesas_operacionais' },
+    { id: 'receita_celcoin', label: 'Receita - Assinatura Celcoin', group: 'receita_vendas' },
     { id: 'receita_diversa', label: 'Receita Diversa', group: 'diversas' },
     { id: 'despesa_diversa', label: 'Despesa Diversa', group: 'diversas' }
 ]
@@ -27,6 +28,7 @@ const SUB_CATEGORIES = {
         'FGTS', 'INSS', 'Material de consumo', 'Material de adm',
         'Manutenção e reformas', 'Custo dos produtos utilizados'
     ],
+    receita_celcoin: ['Assinatura mensal', 'Assinatura trimestral', 'Assinatura semestral', 'Assinatura anual'],
     receita_diversa: ['Rendimento financeiro', 'Outras receitas'],
     despesa_diversa: ['Tarifas bancárias', 'Juros e multas', 'Outras despesas']
 }
@@ -148,19 +150,31 @@ export function FinancialDashboard() {
             const services = storeLanc.filter(d => isService(d))
             const revenueItems = storeLanc.filter(d => isRevenue(d))
 
-            // (+) Receita de Vendas
+            // storeFinance (mover antes da receita para usar com Celcoin)
+            const storeFinance = storeFilter === 'consolidado'
+                ? financialData
+                : financialData.filter(d => d.store_id === storeFilter || d.store_id === 'global')
+
+            // (+) Receita de Vendas (4 sub-linhas + Celcoin manual)
             const vendaServico = revenueItems
                 .filter(d => d.tipo === 'servico' || !d.tipo)
+                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+            const vendaAssinaturaLoja = revenueItems
+                .filter(d => d.tipo === 'venda_assinatura')
+                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+            const vendaCelcoin = storeFinance
+                .filter(d => d.finance_category === 'receita_celcoin' && d.status !== 'provisionado')
+                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
+            const vendaAssinaturas = vendaAssinaturaLoja + vendaCelcoin
+            const vendaVale = revenueItems
+                .filter(d => d.tipo === 'venda_vale')
                 .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
             const vendaProduto = revenueItems
                 .filter(d => d.tipo === 'produto')
                 .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-            const receitaVendas = vendaServico + vendaProduto
+            const receitaVendas = vendaServico + vendaAssinaturas + vendaVale + vendaProduto
 
             // (-) Impostos (manual)
-            const storeFinance = storeFilter === 'consolidado'
-                ? financialData
-                : financialData.filter(d => d.store_id === storeFilter || d.store_id === 'global')
             const impostos = storeFinance
                 .filter(d => d.finance_category === 'imposto' && d.status !== 'provisionado')
                 .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
@@ -171,14 +185,23 @@ export function FinancialDashboard() {
             const receitaLiquida = receitaVendas - impostos
 
             // (-) Despesas de Vendas
-            // Comissão de serviços com receita (din/pix/cartão)
+            // Comissão de serviços com receita (din/pix/cartão) - só tipo servico
             const comissaoReceita = services
+                .filter(d => d.tipo === 'servico' || !d.tipo)
                 .filter(d => !isNonCashRevenue(d))
                 .reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-            // Comissão de serviços assinante/vale
+            // Comissão de serviços assinante/vale - só tipo servico
             const comissaoAssinVale = services
+                .filter(d => d.tipo === 'servico' || !d.tipo)
                 .filter(d => isNonCashRevenue(d))
                 .reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+            // Comissão de produtos (R$5 fixo por venda)
+            const comissaoProduto = services
+                .filter(d => d.tipo === 'produto')
+                .reduce((s, d) => {
+                    const com = parseFloat(d.comissao_barbeiro) || 0
+                    return s + (com > 0 ? com : 5)
+                }, 0)
             // Taxa cartão (automático)
             const taxaCartao = revenueItems.reduce((s, d) => {
                 const pm = d.forma_pagamento?.toLowerCase() || ''
@@ -194,7 +217,7 @@ export function FinancialDashboard() {
             const despVendaManualDetail = storeFinance
                 .filter(d => d.finance_category === 'despesa_venda' && d.status !== 'provisionado')
 
-            const totalDespVenda = comissaoReceita + comissaoAssinVale + taxaCartao + despVendaManual
+            const totalDespVenda = comissaoReceita + comissaoAssinVale + comissaoProduto + taxaCartao + despVendaManual
 
             // (=) Lucro Bruto
             const lucroBruto = receitaLiquida - totalDespVenda
@@ -225,10 +248,10 @@ export function FinancialDashboard() {
             const lucroFinal = lucroOperacional + saldoDiversas
 
             return {
-                vendaServico, vendaProduto, receitaVendas,
+                vendaServico, vendaAssinaturas, vendaVale, vendaProduto, vendaCelcoin, receitaVendas,
                 impostos, impostosDetail,
                 receitaLiquida,
-                comissaoReceita, comissaoAssinVale, taxaCartao, despVendaManual, despVendaManualDetail, totalDespVenda,
+                comissaoReceita, comissaoAssinVale, comissaoProduto, taxaCartao, despVendaManual, despVendaManualDetail, totalDespVenda,
                 lucroBruto,
                 despOperacionais, despOperacionaisDetail,
                 lucroOperacional,
@@ -276,17 +299,45 @@ export function FinancialDashboard() {
                 return pm.includes('crédit') || pm.includes('credit') || pm === 'crédito' || pm === 'credito'
             }).reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
-            const totalEntradas = dinheiro + pix + debito + credito
-
-            // Saídas do mês (despesas pagas)
+            // Celcoin (entrada manual paga)
             const storeFinance = storeFilter === 'consolidado'
                 ? financialData
                 : financialData.filter(d => d.store_id === storeFilter || d.store_id === 'global')
-            const despesasPagas = storeFinance
-                .filter(d => d.status === 'pago' && d.finance_category !== 'receita_diversa')
+            const celcoinPago = storeFinance
+                .filter(d => d.finance_category === 'receita_celcoin' && d.status === 'pago')
                 .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
 
-            return { dinheiro, pix, debito, credito, totalEntradas, despesasPagas }
+            const totalEntradas = dinheiro + pix + debito + credito + celcoinPago
+
+            // Saídas do mês
+            const despesasManuais = storeFinance
+                .filter(d => d.status === 'pago' && d.finance_category !== 'receita_diversa' && d.finance_category !== 'receita_celcoin')
+                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
+
+            // Comissões automáticas (saída)
+            const comissaoServicos = services
+                .filter(d => d.tipo === 'servico' || !d.tipo)
+                .reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+            const comissaoProdutos = services
+                .filter(d => d.tipo === 'produto')
+                .reduce((s, d) => {
+                    const com = parseFloat(d.comissao_barbeiro) || 0
+                    return s + (com > 0 ? com : 5)
+                }, 0)
+            const comissaoTotal = comissaoServicos + comissaoProdutos
+
+            // Taxa cartão automática (saída)
+            const taxaCartao = revenueItems.reduce((s, d) => {
+                const pm = d.forma_pagamento?.toLowerCase() || ''
+                const val = parseFloat(d.valor_bruto) || 0
+                if (pm.includes('crédit') || pm.includes('credit') || pm === 'crédito' || pm === 'credito') return s + val * 0.05
+                if (pm.includes('débit') || pm.includes('debit') || pm === 'débito' || pm === 'debito') return s + val * 0.02
+                return s
+            }, 0)
+
+            const totalSaidas = despesasManuais + comissaoTotal + taxaCartao
+
+            return { dinheiro, pix, debito, credito, celcoinPago, totalEntradas, despesasManuais, comissaoTotal, taxaCartao, totalSaidas }
         }
 
         return {
@@ -463,8 +514,10 @@ export function FinancialDashboard() {
                     <div className="divide-y divide-gray-800/50">
                         {/* (+) Receita de Vendas */}
                         <DreSection sign="+" label="Receita de Vendas" total={activeDre.receitaVendas} color="green">
-                            <DreLine label="Venda de serviço" value={activeDre.vendaServico} auto />
-                            <DreLine label="Venda de produto" value={activeDre.vendaProduto} auto />
+                            <DreLine label="Venda de serviços" value={activeDre.vendaServico} auto />
+                            <DreLine label="Venda de assinaturas" value={activeDre.vendaAssinaturas} auto />
+                            <DreLine label="Venda de vale presente" value={activeDre.vendaVale} auto />
+                            <DreLine label="Venda de produtos" value={activeDre.vendaProduto} auto />
                         </DreSection>
 
                         {/* (-) Impostos */}
@@ -482,6 +535,7 @@ export function FinancialDashboard() {
                         <DreSection sign="-" label="Despesas de Vendas" total={activeDre.totalDespVenda} color="red">
                             <DreLine label="Comissão (Din/Pix/Cartão)" value={activeDre.comissaoReceita} auto />
                             <DreLine label="Comissão (Assinante/Vale)" value={activeDre.comissaoAssinVale} auto />
+                            <DreLine label="Comissão produtos (R$5/un)" value={activeDre.comissaoProduto} auto />
                             <DreLine label="Taxa de cartão" value={activeDre.taxaCartao} auto />
                             {activeDre.despVendaManualDetail.map(d => (
                                 <DreLine key={d.id} label={d.description} value={parseFloat(d.amount) || 0} />
@@ -523,25 +577,38 @@ export function FinancialDashboard() {
                     <h3 className="font-bold text-gray-200 mb-4 flex items-center gap-2">
                         <Wallet size={18} className="text-green-500" /> Fluxo de Caixa
                     </h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    {/* Entradas */}
+                    <p className="text-xs text-green-500 font-semibold mb-2 uppercase tracking-wider">Entradas</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                         <CashCard label="Dinheiro" value={activeCash.dinheiro} icon={Banknote} color="green" />
                         <CashCard label="Pix" value={activeCash.pix} icon={Smartphone} color="cyan" />
                         <CashCard label="Débito" value={activeCash.debito} icon={CreditCard} color="orange" />
                         <CashCard label="Crédito" value={activeCash.credito} icon={CreditCard} color="yellow" />
+                        {activeCash.celcoinPago > 0 && <CashCard label="Celcoin" value={activeCash.celcoinPago} icon={Wallet} color="purple" />}
                     </div>
+
+                    {/* Saídas */}
+                    <p className="text-xs text-red-500 font-semibold mb-2 mt-4 uppercase tracking-wider">Saídas</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <CashCard label="Comissões" value={activeCash.comissaoTotal} icon={DollarSign} color="red" />
+                        <CashCard label="Taxa Cartão" value={activeCash.taxaCartao} icon={CreditCard} color="red" />
+                        <CashCard label="Despesas Pagas" value={activeCash.despesasManuais} icon={TrendingDown} color="red" />
+                    </div>
+
+                    {/* Resumo */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
                         <div className="bg-green-900/20 border border-green-800/50 rounded-xl p-4 text-center">
-                            <span className="text-xs text-green-500 block mb-1">Entradas Imediatas</span>
+                            <span className="text-xs text-green-500 block mb-1">Total Entradas</span>
                             <span className="text-xl font-bold text-green-400">{fmt(activeCash.totalEntradas)}</span>
                         </div>
                         <div className="bg-red-900/20 border border-red-800/50 rounded-xl p-4 text-center">
-                            <span className="text-xs text-red-500 block mb-1">Despesas Pagas</span>
-                            <span className="text-xl font-bold text-red-400">{fmt(activeCash.despesasPagas)}</span>
+                            <span className="text-xs text-red-500 block mb-1">Total Saídas</span>
+                            <span className="text-xl font-bold text-red-400">{fmt(activeCash.totalSaidas)}</span>
                         </div>
-                        <div className={`border rounded-xl p-4 text-center ${(activeCash.totalEntradas - activeCash.despesasPagas) >= 0 ? 'bg-cyan-900/20 border-cyan-800/50' : 'bg-red-900/20 border-red-800/50'}`}>
+                        <div className={`border rounded-xl p-4 text-center ${(activeCash.totalEntradas - activeCash.totalSaidas) >= 0 ? 'bg-cyan-900/20 border-cyan-800/50' : 'bg-red-900/20 border-red-800/50'}`}>
                             <span className="text-xs text-gray-400 block mb-1">Saldo de Caixa</span>
-                            <span className={`text-xl font-bold ${(activeCash.totalEntradas - activeCash.despesasPagas) >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>
-                                {fmt(activeCash.totalEntradas - activeCash.despesasPagas)}
+                            <span className={`text-xl font-bold ${(activeCash.totalEntradas - activeCash.totalSaidas) >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>
+                                {fmt(activeCash.totalEntradas - activeCash.totalSaidas)}
                             </span>
                         </div>
                     </div>
@@ -619,8 +686,8 @@ export function FinancialDashboard() {
                                         </span>
                                     </td>
                                     <td className="px-4 py-2.5 text-gray-400 text-xs">{STORE_OPTIONS.find(s => s.id === item.store_id)?.label || item.store_id}</td>
-                                    <td className={`px-4 py-2.5 text-right font-bold ${item.finance_category === 'receita_diversa' ? 'text-green-400' : 'text-red-400'}`}>
-                                        {item.finance_category === 'receita_diversa' ? '+' : '-'} {fmt(parseFloat(item.amount || item.value || 0))}
+                                    <td className={`px-4 py-2.5 text-right font-bold ${(item.finance_category === 'receita_diversa' || item.finance_category === 'receita_celcoin') ? 'text-green-400' : 'text-red-400'}`}>
+                                        {(item.finance_category === 'receita_diversa' || item.finance_category === 'receita_celcoin') ? '+' : '-'} {fmt(parseFloat(item.amount || item.value || 0))}
                                     </td>
                                     <td className="px-4 py-2.5 text-center">
                                         <StatusBadge status={item.status} onClick={() => toggleStatus(item)} />
@@ -844,6 +911,7 @@ function getCategoryStyle(cat) {
         imposto: 'bg-red-900/30 text-red-400 border-red-800/50',
         despesa_venda: 'bg-orange-900/30 text-orange-400 border-orange-800/50',
         despesa_operacional: 'bg-yellow-900/30 text-yellow-400 border-yellow-800/50',
+        receita_celcoin: 'bg-cyan-900/30 text-cyan-400 border-cyan-800/50',
         receita_diversa: 'bg-green-900/30 text-green-400 border-green-800/50',
         despesa_diversa: 'bg-purple-900/30 text-purple-400 border-purple-800/50'
     }
