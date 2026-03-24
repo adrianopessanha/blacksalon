@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { auth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from './firebase'
-import { LogOut, Scissors, BarChart3, Wallet } from 'lucide-react'
+import { LogOut, Scissors, BarChart3, Wallet, Download } from 'lucide-react'
 
 import { ServiceForm } from './components/ServiceForm'
 import { ReportsDashboard } from './components/ReportsDashboard'
@@ -14,6 +14,8 @@ import { BARBERS } from './data/barbers'
 function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [installPrompt, setInstallPrompt] = useState(null)
+  const [isInstalled, setIsInstalled] = useState(false)
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -23,9 +25,41 @@ function App() {
     return () => unsub()
   }, [])
 
+  // PWA Install Prompt
+  useEffect(() => {
+    // Check if already installed
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+      setIsInstalled(true)
+      return
+    }
+
+    const handler = (e) => {
+      e.preventDefault()
+      setInstallPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+
+    window.addEventListener('appinstalled', () => {
+      setIsInstalled(true)
+      setInstallPrompt(null)
+    })
+
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
+
+  const handleInstall = async () => {
+    if (!installPrompt) return
+    installPrompt.prompt()
+    const result = await installPrompt.userChoice
+    if (result.outcome === 'accepted') {
+      setIsInstalled(true)
+    }
+    setInstallPrompt(null)
+  }
+
   if (loading) return <div className="flex h-screen items-center justify-center bg-gray-900 text-cyan-500">Carregando...</div>
 
-  if (!user) return <LoginScreen />
+  if (!user) return <LoginScreen installPrompt={installPrompt} onInstall={handleInstall} isInstalled={isInstalled} />
 
   // Determine Admin Status
   const currentUserData = BARBERS.find(b => b.email === user.email)
@@ -50,6 +84,12 @@ function App() {
             </>
           )}
 
+          {installPrompt && !isInstalled && (
+            <button onClick={handleInstall}
+              className="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-all animate-pulse">
+              <Download size={14} /> Instalar App
+            </button>
+          )}
           <button onClick={() => signOut(auth)} className="text-gray-400 hover:text-white"><LogOut size={18} /></button>
         </nav>
       </header>
@@ -72,7 +112,7 @@ function App() {
   )
 }
 
-function LoginScreen() {
+function LoginScreen({ installPrompt, onInstall, isInstalled }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -96,6 +136,13 @@ function LoginScreen() {
     <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="bg-gray-900 p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-800">
         <h1 className="text-3xl font-bold text-cyan-500 mb-6 text-center">BLACK SALON</h1>
+
+        {installPrompt && !isInstalled && (
+          <button onClick={onInstall}
+            className="w-full mb-4 flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-cyan-900/20 animate-pulse">
+            <Download size={18} /> Instalar App no Celular
+          </button>
+        )}
 
         {error && <div className="bg-red-900/50 text-red-200 p-3 rounded mb-4 text-sm border border-red-800">{error}</div>}
 
