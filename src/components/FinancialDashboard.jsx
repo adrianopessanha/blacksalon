@@ -666,9 +666,18 @@ export function FinancialDashboard() {
                         className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500">
                         {STATUS_OPTIONS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
                     </select>
-                    <input type="date" value={newEntry.date}
-                        onChange={e => setNewEntry({ ...newEntry, date: e.target.value })}
-                        className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500" />
+                    <div className="flex flex-col">
+                        <label className="text-[10px] text-gray-500 mb-0.5">Data</label>
+                        <input type="date" value={newEntry.date}
+                            onChange={e => setNewEntry({ ...newEntry, date: e.target.value })}
+                            className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500" />
+                    </div>
+                    <div className="flex flex-col">
+                        <label className="text-[10px] text-gray-500 mb-0.5">Mês Competência</label>
+                        <input type="month" value={newEntry.competence_month}
+                            onChange={e => setNewEntry({ ...newEntry, competence_month: e.target.value })}
+                            className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500" />
+                    </div>
                     <button onClick={handleAddEntry} disabled={processing}
                         className="col-span-2 sm:col-span-4 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg py-2.5 flex items-center justify-center gap-2 font-medium disabled:opacity-50">
                         <PlusCircle size={18} /> {processing ? 'Salvando...' : 'Adicionar'}
@@ -681,6 +690,7 @@ export function FinancialDashboard() {
                         <thead className="bg-gray-950 text-gray-500 text-xs">
                             <tr>
                                 <th className="px-4 py-3 font-medium">Data</th>
+                                <th className="px-4 py-3 font-medium">Competência</th>
                                 <th className="px-4 py-3 font-medium">Descrição</th>
                                 <th className="px-4 py-3 font-medium">Categoria</th>
                                 <th className="px-4 py-3 font-medium">Loja</th>
@@ -691,10 +701,17 @@ export function FinancialDashboard() {
                         </thead>
                         <tbody className="divide-y divide-gray-800/50 text-gray-300">
                             {financialData.length === 0 ? (
-                                <tr><td colSpan="7" className="px-4 py-8 text-center text-gray-500">Nenhum lançamento manual neste mês</td></tr>
+                                <tr><td colSpan="8" className="px-4 py-8 text-center text-gray-500">Nenhum lançamento manual neste mês</td></tr>
                             ) : financialData.map(item => (
                                 <tr key={item.id} className="hover:bg-gray-800/30 transition-colors">
                                     <td className="px-4 py-2.5 text-gray-500 text-xs">{item.date ? new Date(item.date + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</td>
+                                    <td className="px-4 py-2.5 text-xs">
+                                        {item.competence_month ? (() => {
+                                            const [y, m] = item.competence_month.split('-')
+                                            const mName = new Date(y, m - 1).toLocaleString('pt-BR', { month: 'short' }).replace('.', '')
+                                            return <span className={item.competence_month !== month ? 'text-yellow-400 font-medium' : 'text-gray-500'}>{mName}/{y}</span>
+                                        })() : '-'}
+                                    </td>
                                     <td className="px-4 py-2.5 font-medium">{item.description}</td>
                                     <td className="px-4 py-2.5">
                                         <span className={`text-xs px-2 py-0.5 rounded border ${getCategoryStyle(item.finance_category)}`}>
