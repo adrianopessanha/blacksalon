@@ -719,7 +719,7 @@ export function ReportsDashboard() {
                                                         <td className="px-3 py-2.5 text-sm text-gray-400">{item.cliente_nome || '-'}</td>
                                                         <td className="px-3 py-2.5 text-sm">{item.servico_descricao}</td>
                                                         <td className="px-3 py-2.5 text-sm text-right">{fmt(parseFloat(item.valor_bruto))}</td>
-                                                        <td className="px-3 py-2.5 text-sm text-right text-gray-500">{fmt(parseFloat(item.comissao_barbeiro))}</td>
+                                                        <td className="px-3 py-2.5 text-sm text-right text-gray-500">{isFinancial(item) ? '-' : fmt(parseFloat(item.comissao_barbeiro))}</td>
                                                         <td className="px-3 py-2.5 text-right">
                                                             <PaymentBadge method={item.forma_pagamento} />
                                                         </td>

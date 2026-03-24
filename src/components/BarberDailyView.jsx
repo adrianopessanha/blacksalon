@@ -117,8 +117,8 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate })
                             }
                         }
 
-                        // [FIX] Não incluir fechamento_comissao na comissão do dia
-                        if (data.tipo !== 'fechamento_comissao') {
+                        // [FIX] Comissão do dia = apenas serviços reais (exclui adiantamento e fechamento)
+                        if (data.tipo !== 'fechamento_comissao' && data.tipo !== 'adiantamento') {
                             tComm += (data.comissao_barbeiro || 0)
                         }
 
