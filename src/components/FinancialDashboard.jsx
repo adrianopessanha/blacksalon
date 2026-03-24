@@ -76,6 +76,8 @@ export function FinancialDashboard() {
         finance_category: 'despesa_operacional',
         status: 'pago',
         date: new Date().toISOString().slice(0, 10),
+        due_date: '',
+        payment_date: new Date().toISOString().slice(0, 10),
         competence_month: new Date().toISOString().slice(0, 7)
     })
 
@@ -378,10 +380,12 @@ export function FinancialDashboard() {
                 finance_category: newEntry.finance_category,
                 status: newEntry.status,
                 date: newEntry.date,
+                due_date: newEntry.due_date || null,
+                payment_date: newEntry.status === 'pago' ? (newEntry.payment_date || newEntry.date) : null,
                 competence_month: newEntry.competence_month,
                 created_at: serverTimestamp()
             })
-            setNewEntry({ ...newEntry, description: '', amount: '' })
+            setNewEntry({ ...newEntry, description: '', amount: '', due_date: '', payment_date: newEntry.status === 'pago' ? new Date().toISOString().slice(0, 10) : '' })
         } catch (e) {
             alert("Erro: " + e.message)
         } finally {
@@ -398,6 +402,8 @@ export function FinancialDashboard() {
             finance_category: item.finance_category || 'despesa_operacional',
             status: item.status || 'pago',
             date: item.date || '',
+            due_date: item.due_date || '',
+            payment_date: item.payment_date || '',
             competence_month: item.competence_month || ''
         })
     }
@@ -421,6 +427,8 @@ export function FinancialDashboard() {
                 finance_category: editData.finance_category,
                 status: editData.status,
                 date: editData.date,
+                due_date: editData.due_date || null,
+                payment_date: editData.status === 'pago' ? (editData.payment_date || editData.date) : null,
                 competence_month: editData.competence_month
             })
             setEditingId(null)
@@ -474,7 +482,16 @@ export function FinancialDashboard() {
     const toggleStatus = async (item) => {
         const cycle = ['pago', 'pendente', 'provisionado']
         const next = cycle[(cycle.indexOf(item.status) + 1) % cycle.length]
-        try { await updateDoc(doc(db, 'financeiro', item.id), { status: next }) }
+        const updates = { status: next }
+        // Preenche data de pagamento automaticamente ao marcar como pago
+        if (next === 'pago' && !item.payment_date) {
+            updates.payment_date = new Date().toISOString().slice(0, 10)
+        }
+        // Limpa data de pagamento se não está pago
+        if (next !== 'pago') {
+            updates.payment_date = null
+        }
+        try { await updateDoc(doc(db, 'financeiro', item.id), updates) }
         catch (e) { alert("Erro: " + e.message) }
     }
 
@@ -712,10 +729,23 @@ export function FinancialDashboard() {
                         {STATUS_OPTIONS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
                     </select>
                     <div className="flex flex-col">
-                        <label className="text-[10px] text-gray-500 mb-0.5">Data</label>
+                        <label className="text-[10px] text-gray-500 mb-0.5">Data Lançamento</label>
                         <input type="date" value={newEntry.date}
                             onChange={e => setNewEntry({ ...newEntry, date: e.target.value })}
                             className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500" />
+                    </div>
+                    <div className="flex flex-col">
+                        <label className="text-[10px] text-gray-500 mb-0.5">Vencimento</label>
+                        <input type="date" value={newEntry.due_date}
+                            onChange={e => setNewEntry({ ...newEntry, due_date: e.target.value })}
+                            className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500" />
+                    </div>
+                    <div className="flex flex-col">
+                        <label className="text-[10px] text-gray-500 mb-0.5">Data Pagamento</label>
+                        <input type="date" value={newEntry.payment_date}
+                            onChange={e => setNewEntry({ ...newEntry, payment_date: e.target.value })}
+                            disabled={newEntry.status !== 'pago'}
+                            className={`bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500 ${newEntry.status !== 'pago' ? 'opacity-40 cursor-not-allowed' : ''}`} />
                     </div>
                     <div className="flex flex-col">
                         <label className="text-[10px] text-gray-500 mb-0.5">Mês Competência</label>
@@ -734,7 +764,9 @@ export function FinancialDashboard() {
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-950 text-gray-500 text-xs">
                             <tr>
-                                <th className="px-4 py-3 font-medium">Data</th>
+                                <th className="px-4 py-3 font-medium">Lançamento</th>
+                                <th className="px-4 py-3 font-medium">Vencimento</th>
+                                <th className="px-4 py-3 font-medium">Pagamento</th>
                                 <th className="px-4 py-3 font-medium">Competência</th>
                                 <th className="px-4 py-3 font-medium">Descrição</th>
                                 <th className="px-4 py-3 font-medium">Categoria</th>
@@ -746,13 +778,24 @@ export function FinancialDashboard() {
                         </thead>
                         <tbody className="divide-y divide-gray-800/50 text-gray-300">
                             {financialData.length === 0 ? (
-                                <tr><td colSpan="8" className="px-4 py-8 text-center text-gray-500">Nenhum lançamento manual neste mês</td></tr>
+                                <tr><td colSpan="10" className="px-4 py-8 text-center text-gray-500">Nenhum lançamento manual neste mês</td></tr>
                             ) : financialData.map(item => editingId === item.id ? (
                                 <tr key={item.id} className="bg-cyan-950/20 border-l-2 border-cyan-500">
                                     <td className="px-2 py-1.5">
                                         <input type="date" value={editData.date}
                                             onChange={e => setEditData({ ...editData, date: e.target.value })}
                                             className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500" />
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <input type="date" value={editData.due_date}
+                                            onChange={e => setEditData({ ...editData, due_date: e.target.value })}
+                                            className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500" />
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <input type="date" value={editData.payment_date}
+                                            onChange={e => setEditData({ ...editData, payment_date: e.target.value })}
+                                            disabled={editData.status !== 'pago'}
+                                            className={`bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500 ${editData.status !== 'pago' ? 'opacity-40' : ''}`} />
                                     </td>
                                     <td className="px-2 py-1.5">
                                         <input type="month" value={editData.competence_month}
@@ -806,6 +849,22 @@ export function FinancialDashboard() {
                             ) : (
                                 <tr key={item.id} className="hover:bg-gray-800/30 transition-colors">
                                     <td className="px-4 py-2.5 text-gray-500 text-xs">{item.date ? new Date(item.date + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</td>
+                                    <td className="px-4 py-2.5 text-xs">
+                                        {item.due_date ? (() => {
+                                            const today = new Date().toISOString().slice(0, 10)
+                                            const isOverdue = item.status !== 'pago' && item.due_date < today
+                                            const isNear = item.status !== 'pago' && !isOverdue && item.due_date <= new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10)
+                                            return <span className={isOverdue ? 'text-red-400 font-bold' : isNear ? 'text-yellow-400 font-medium' : 'text-gray-400'}>
+                                                {new Date(item.due_date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                                                {isOverdue && ' ⚠'}
+                                            </span>
+                                        })() : <span className="text-gray-600">-</span>}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-xs">
+                                        {item.payment_date
+                                            ? <span className="text-green-400">{new Date(item.payment_date + 'T12:00:00').toLocaleDateString('pt-BR')}</span>
+                                            : <span className="text-gray-600">-</span>}
+                                    </td>
                                     <td className="px-4 py-2.5 text-xs">
                                         {item.competence_month ? (() => {
                                             const [y, m] = item.competence_month.split('-')
