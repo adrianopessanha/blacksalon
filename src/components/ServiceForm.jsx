@@ -78,8 +78,10 @@ export function ServiceForm() {
         if (newPresets.length > 0) {
             const desc = newPresets.map(p => p.desc).join(' + ')
             const total = newPresets.reduce((sum, p) => sum + p.value, 0)
-            const hasPlano = newPresets.some(p => p.label.includes('plano'))
-            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico', forma_pagamento: hasPlano ? 'Assinante' : formData.forma_pagamento })
+            const planos = newPresets.filter(p => p.label.includes('plano'))
+            const avulsos = newPresets.filter(p => !p.label.includes('plano'))
+            const onlyPlano = planos.length > 0 && avulsos.length === 0
+            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico', forma_pagamento: onlyPlano ? 'Assinante' : (formData.forma_pagamento === 'Assinante' && avulsos.length > 0 ? 'Dinheiro' : formData.forma_pagamento) })
         } else {
             setFormData({ ...formData, servico_descricao: '', valor_bruto: '' })
         }
@@ -108,21 +110,6 @@ export function ServiceForm() {
         try {
             if (!activeBarber) throw new Error('Nenhum barbeiro selecionado.')
 
-            const valor = parseFloat(formData.valor_bruto)
-
-            let fee = 0
-            if (formData.forma_pagamento === 'Crédito') fee = 0.05
-            if (formData.forma_pagamento === 'Débito') fee = 0.02
-
-            const base = valor * (1 - fee)
-
-            let comissao_barbeiro = 0
-            if (formData.tipo === 'servico') {
-                comissao_barbeiro = base * 0.5
-            } else if (formData.tipo === 'produto') {
-                comissao_barbeiro = 5.00
-            }
-
             const now = new Date()
             const todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
 
@@ -140,21 +127,74 @@ export function ServiceForm() {
                 }
             }
 
-            await addDoc(collection(db, 'lancamentos'), {
+            const calcComissao = (valor, pagamento, tipo) => {
+                let fee = 0
+                if (pagamento === 'Crédito') fee = 0.05
+                if (pagamento === 'Débito') fee = 0.02
+                const base = valor * (1 - fee)
+                if (tipo === 'servico') return parseFloat((base * 0.5).toFixed(2))
+                if (tipo === 'produto') return 5.00
+                return 0
+            }
+
+            const baseEntry = {
                 data: entryDataField,
                 barbeiro_id: activeBarber.id,
                 barbeiro_nome: activeBarber.name,
                 loja_id: activeBarber.store,
                 cliente_nome: formData.cliente_nome || 'Não Informado',
-                servico_descricao: formData.servico_descricao,
-                valor_bruto: valor,
-                forma_pagamento: formData.forma_pagamento,
-                comissao_barbeiro: parseFloat(comissao_barbeiro.toFixed(2)),
-                tipo: formData.tipo,
                 created_at: serverTimestamp()
-            })
+            }
 
-            alert(`Lançamento salvo para ${activeBarber.name}!`)
+            // Detectar mix plano + avulso
+            const planos = selectedPresets.filter(p => p.label.includes('plano'))
+            const avulsos = selectedPresets.filter(p => !p.label.includes('plano'))
+            const isMixed = planos.length > 0 && avulsos.length > 0
+
+            if (isMixed) {
+                // Lançamento 1: serviços do plano (Assinante)
+                const planoDesc = planos.map(p => p.desc).join(' + ')
+                const planoValor = planos.reduce((s, p) => s + p.value, 0)
+                const planoComissao = calcComissao(planoValor, 'Assinante', 'servico')
+                await addDoc(collection(db, 'lancamentos'), {
+                    ...baseEntry,
+                    servico_descricao: planoDesc,
+                    valor_bruto: planoValor,
+                    forma_pagamento: 'Assinante',
+                    comissao_barbeiro: planoComissao,
+                    tipo: 'servico'
+                })
+
+                // Lançamento 2: serviços avulsos (pagamento escolhido)
+                const avulsoDesc = avulsos.map(p => p.desc).join(' + ')
+                const avulsoValor = avulsos.reduce((s, p) => s + p.value, 0)
+                const avulsoComissao = calcComissao(avulsoValor, formData.forma_pagamento, 'servico')
+                await addDoc(collection(db, 'lancamentos'), {
+                    ...baseEntry,
+                    servico_descricao: avulsoDesc,
+                    valor_bruto: avulsoValor,
+                    forma_pagamento: formData.forma_pagamento,
+                    comissao_barbeiro: avulsoComissao,
+                    tipo: 'servico'
+                })
+
+                alert(`2 lançamentos salvos para ${activeBarber.name}!\n• ${planoDesc} (Assinante)\n• ${avulsoDesc} (${formData.forma_pagamento})`)
+            } else {
+                // Lançamento único normal
+                const valor = parseFloat(formData.valor_bruto)
+                const comissao_barbeiro = calcComissao(valor, formData.forma_pagamento, formData.tipo)
+
+                await addDoc(collection(db, 'lancamentos'), {
+                    ...baseEntry,
+                    servico_descricao: formData.servico_descricao,
+                    valor_bruto: valor,
+                    forma_pagamento: formData.forma_pagamento,
+                    comissao_barbeiro,
+                    tipo: formData.tipo
+                })
+
+                alert(`Lançamento salvo para ${activeBarber.name}!`)
+            }
             setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '' })
             setSelectedPresets([])
             setShowCustomDesc(false)
@@ -359,27 +399,37 @@ export function ServiceForm() {
                             <div>
                                 <label className="block text-xs text-gray-500 mb-2 uppercase tracking-wider font-semibold">Pagamento</label>
                                 {(() => {
-                                    const isPlano = selectedPresets.some(p => p.label.includes('plano'))
+                                    const planos = selectedPresets.filter(p => p.label.includes('plano'))
+                                    const avulsos = selectedPresets.filter(p => !p.label.includes('plano'))
+                                    const onlyPlano = planos.length > 0 && avulsos.length === 0
+                                    const isMixed = planos.length > 0 && avulsos.length > 0
                                     return (
-                                        <div className="grid grid-cols-3 gap-2">
-                                            {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
-                                                const disabled = isPlano && pm !== 'Assinante'
-                                                return (
-                                                    <button type="button" key={pm}
-                                                        onClick={() => !disabled && setFormData({ ...formData, forma_pagamento: pm })}
-                                                        disabled={disabled}
-                                                        className={`text-sm py-2.5 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm
-                                                            ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
-                                                            : disabled
-                                                                ? 'bg-gray-950 border-gray-800 text-gray-700 cursor-not-allowed opacity-40'
-                                                                : 'bg-gray-950 border-gray-800 text-gray-400'
-                                                            }`}
-                                                    >
-                                                        {pm}
-                                                    </button>
-                                                )
-                                            })}
-                                        </div>
+                                        <>
+                                            {isMixed && (
+                                                <div className="text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-800/40 rounded-lg px-3 py-2 mb-2">
+                                                    ⚡ Mix plano + avulso: será separado em 2 lançamentos. Escolha o pagamento do serviço avulso ({avulsos.map(p => p.label).join(', ')}).
+                                                </div>
+                                            )}
+                                            <div className="grid grid-cols-3 gap-2">
+                                                {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
+                                                    const disabled = onlyPlano && pm !== 'Assinante'
+                                                    return (
+                                                        <button type="button" key={pm}
+                                                            onClick={() => !disabled && setFormData({ ...formData, forma_pagamento: pm })}
+                                                            disabled={disabled}
+                                                            className={`text-sm py-2.5 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm
+                                                                ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
+                                                                : disabled
+                                                                    ? 'bg-gray-950 border-gray-800 text-gray-700 cursor-not-allowed opacity-40'
+                                                                    : 'bg-gray-950 border-gray-800 text-gray-400'
+                                                                }`}
+                                                        >
+                                                            {pm}
+                                                        </button>
+                                                    )
+                                                })}
+                                            </div>
+                                        </>
                                     )
                                 })()}
                             </div>
