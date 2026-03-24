@@ -1127,6 +1127,7 @@ function AllBarbersCard({ byBarber }) {
                             <th className="py-2 px-2 font-medium text-right">Com. Receita</th>
                             <th className="py-2 px-2 font-medium text-right">Com. Assin/Vale</th>
                             <th className="py-2 px-2 font-medium text-right">Com. Total</th>
+                            <th className="py-2 px-2 font-medium text-right">Resultado</th>
                             <th className="py-2 px-2 font-medium text-center">Atend.</th>
                             <th className="py-2 pl-2 font-medium text-right">Ticket Médio</th>
                         </tr>
@@ -1145,6 +1146,7 @@ function AllBarbersCard({ byBarber }) {
                                 <td className="py-2.5 px-2 text-right text-green-400">{fmt(b.commissionRevenue)}</td>
                                 <td className="py-2.5 px-2 text-right text-purple-400">{fmt(b.commissionNonCash)}</td>
                                 <td className="py-2.5 px-2 text-right font-semibold text-gray-200">{fmt(b.commission)}</td>
+                                <td className={`py-2.5 px-2 text-right font-semibold ${(b.gross - b.commission) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmt(b.gross - b.commission)}</td>
                                 <td className="py-2.5 px-2 text-center text-gray-400">{b.serviceCount}</td>
                                 <td className="py-2.5 pl-2 text-right text-yellow-400">{fmt(b.serviceCount > 0 ? b.gross / b.serviceCount : 0)}</td>
                             </tr>
