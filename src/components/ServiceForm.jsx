@@ -11,13 +11,14 @@ import { useBarberStats } from '../hooks/useBarberStats'
 // SERVICE PRESETS (quick-tap chips, multi-select)
 // ==========================================
 const SERVICE_PRESETS = [
-    { label: 'Maq', desc: 'Corte maq', value: 30 },
-    { label: 'Maq+Tes', desc: 'Corte maq+tes', value: 40 },
-    { label: 'Barba', desc: 'Barba', value: 30 },
-    { label: 'Sobranc.', desc: 'Sobrancelha', value: 10 },
-    { label: 'Pigment.', desc: 'Pigmentacao', value: 20 },
-    { label: 'Reflexo', desc: 'Reflexo curto', value: 60 },
-    { label: 'Alisam.', desc: 'Alisamento curto', value: 60 },
+    { label: 'M', desc: 'Corte maq', value: 30 },
+    { label: 'M+T', desc: 'Corte maq+tes', value: 40 },
+    { label: 'B', desc: 'Barba', value: 30 },
+    { label: 'Sobr', desc: 'Sobrancelha', value: 10 },
+    { label: 'Pigm', desc: 'Pigmentacao', value: 20 },
+    { label: 'M plano', desc: 'Corte maq plano', value: 20 },
+    { label: 'M+T plano', desc: 'Corte maq+tes plano', value: 25 },
+    { label: 'C+B plano', desc: 'Corte+barba plano', value: 35 },
 ]
 
 export function ServiceForm() {
