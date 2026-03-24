@@ -8,14 +8,16 @@ import { BarberRanking } from './BarberRanking'
 import { useBarberStats } from '../hooks/useBarberStats'
 
 // ==========================================
-// SERVICE PRESETS (quick-tap chips)
+// SERVICE PRESETS (quick-tap chips, multi-select)
 // ==========================================
 const SERVICE_PRESETS = [
-    { label: 'Corte', desc: 'Corte', value: 30 },
-    { label: 'Barba', desc: 'Barba', value: 25 },
-    { label: 'Corte + Barba', desc: 'Corte e barba', value: 35 },
-    { label: 'Sobrancelha', desc: 'Sobrancelha', value: 15 },
-    { label: 'Pigmentacao', desc: 'Pigmentacao', value: 50 },
+    { label: 'Maq', desc: 'Corte maq', value: 30 },
+    { label: 'Maq+Tes', desc: 'Corte maq+tes', value: 40 },
+    { label: 'Barba', desc: 'Barba', value: 30 },
+    { label: 'Sobranc.', desc: 'Sobrancelha', value: 10 },
+    { label: 'Pigment.', desc: 'Pigmentacao', value: 20 },
+    { label: 'Reflexo', desc: 'Reflexo curto', value: 60 },
+    { label: 'Alisam.', desc: 'Alisamento curto', value: 60 },
 ]
 
 export function ServiceForm() {
@@ -38,7 +40,7 @@ export function ServiceForm() {
         cliente_nome: ''
     })
     const [loading, setLoading] = useState(false)
-    const [selectedPreset, setSelectedPreset] = useState(null)
+    const [selectedPresets, setSelectedPresets] = useState([])
     const [showCustomDesc, setShowCustomDesc] = useState(false)
     const isSubmittingRef = useRef(false)
 
@@ -61,19 +63,28 @@ export function ServiceForm() {
         formData.data_manual || today
     )
 
-    const handlePresetSelect = (preset) => {
-        setSelectedPreset(preset.label)
+    const handlePresetToggle = (preset) => {
         setShowCustomDesc(false)
-        setFormData({
-            ...formData,
-            servico_descricao: preset.desc,
-            valor_bruto: preset.value.toString(),
-            tipo: 'servico'
-        })
+        const isSelected = selectedPresets.find(p => p.label === preset.label)
+        let newPresets
+        if (isSelected) {
+            newPresets = selectedPresets.filter(p => p.label !== preset.label)
+        } else {
+            newPresets = [...selectedPresets, preset]
+        }
+        setSelectedPresets(newPresets)
+
+        if (newPresets.length > 0) {
+            const desc = newPresets.map(p => p.desc).join(' + ')
+            const total = newPresets.reduce((sum, p) => sum + p.value, 0)
+            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico' })
+        } else {
+            setFormData({ ...formData, servico_descricao: '', valor_bruto: '' })
+        }
     }
 
     const handleCustomService = () => {
-        setSelectedPreset('custom')
+        setSelectedPresets([])
         setShowCustomDesc(true)
         setFormData({ ...formData, servico_descricao: '', valor_bruto: '' })
     }
@@ -143,7 +154,7 @@ export function ServiceForm() {
 
             alert(`Lançamento salvo para ${activeBarber.name}!`)
             setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '' })
-            setSelectedPreset(null)
+            setSelectedPresets([])
             setShowCustomDesc(false)
         } catch (e) {
             console.error(e)
@@ -242,27 +253,40 @@ export function ServiceForm() {
                             </div>
                         )}
 
-                        {/* Service Preset Chips */}
+                        {/* Service Preset Chips (multi-select) */}
                         <div>
-                            <label className="block text-xs text-gray-500 mb-2 uppercase tracking-wider font-semibold">Servico</label>
-                            <div className="flex flex-wrap gap-2">
-                                {SERVICE_PRESETS.map(preset => (
-                                    <button
-                                        key={preset.label}
-                                        type="button"
-                                        onClick={() => handlePresetSelect(preset)}
-                                        className={`px-3 py-2 rounded-lg text-sm font-medium transition-all active:scale-95 ${selectedPreset === preset.label
-                                            ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/30 ring-2 ring-cyan-400/30'
-                                            : 'bg-gray-950 border border-gray-800 text-gray-300 hover:border-gray-600'
-                                            }`}
-                                    >
-                                        {preset.label}
-                                    </button>
-                                ))}
+                            <div className="flex items-center justify-between mb-2">
+                                <label className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Servico</label>
+                                {selectedPresets.length > 1 && (
+                                    <span className="text-[10px] text-cyan-400 font-bold bg-cyan-900/30 px-2 py-0.5 rounded-full">
+                                        {selectedPresets.length} selecionados
+                                    </span>
+                                )}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {SERVICE_PRESETS.map(preset => {
+                                    const isActive = selectedPresets.some(p => p.label === preset.label)
+                                    return (
+                                        <button
+                                            key={preset.label}
+                                            type="button"
+                                            onClick={() => handlePresetToggle(preset)}
+                                            className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all active:scale-95 ${isActive
+                                                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/30 ring-1 ring-cyan-400/30'
+                                                : 'bg-gray-950 border border-gray-800 text-gray-300 hover:border-gray-600'
+                                                }`}
+                                        >
+                                            {preset.label}
+                                            <span className={`ml-1 text-[10px] ${isActive ? 'text-cyan-200' : 'text-gray-600'}`}>
+                                                {preset.value}
+                                            </span>
+                                        </button>
+                                    )
+                                })}
                                 <button
                                     type="button"
                                     onClick={handleCustomService}
-                                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${selectedPreset === 'custom'
+                                    className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all ${showCustomDesc
                                         ? 'bg-cyan-600 text-white shadow-lg'
                                         : 'bg-gray-950 border border-gray-800 text-gray-500 hover:border-gray-600'
                                         }`}
@@ -270,6 +294,12 @@ export function ServiceForm() {
                                     Outro...
                                 </button>
                             </div>
+                            {/* Combined description preview */}
+                            {selectedPresets.length > 0 && (
+                                <div className="mt-2 text-xs text-gray-400 bg-gray-950 rounded-lg px-3 py-1.5 border border-gray-800">
+                                    {formData.servico_descricao}
+                                </div>
+                            )}
                         </div>
 
                         {/* Custom description (only when "Outro" selected) */}
