@@ -6,33 +6,50 @@ import { useSubscribers } from '../hooks/useSubscribers'
 
 // ==========================================
 // PLAN CONFIGURATIONS
+// Nomes exatos da Celcoin + valores e comissões do negócio
 // ==========================================
 const PLANS = [
-    { id: 'maquina', label: 'Só Máquina', value: 80, commission: 10, fee: 5.40, presetDesc: ['Corte maq plano'] },
-    { id: 'maq_tesoura', label: 'Máq+Tesoura', value: 100, commission: 12.50, fee: 6.81, presetDesc: ['Corte maq+tes plano'] },
-    { id: 'cabelo_barba', label: 'Cabelo e Barba', value: 140, commission: 17.50, fee: 8.88, presetDesc: ['Corte+barba plano', 'Corte maq plano + Barba', 'Corte maq+tes plano + Barba'] },
-    { id: 'barba', label: 'Barba', value: 80, commission: 10, fee: 5.40, presetDesc: ['Barba plano'] },
+    { id: 'cria', label: 'Corte de Cria', celcoin: 'plano corte de cria', value: 80, commission: 10, fee: 5.40 },
+    { id: 'corte', label: 'Corte Ilimitado', celcoin: 'plano corte de cabelo ilimitado', value: 100, commission: 12.50, fee: 6.81 },
+    { id: 'cabelo_barba', label: 'Cabelo e Barba', celcoin: 'plano cabelo e barba ilimitado', value: 140, commission: 17.50, fee: 8.88 },
+    { id: 'barba', label: 'Barba Ilimitada', celcoin: 'plano barba ilimitada', value: 80, commission: 10, fee: 5.40 },
 ]
 
-// Detect which plan a subscriber is on based on sheet data or usage
+// Detect plan from Celcoin plan name, sheet data, or plan value
 function detectPlan(subscriber, visits) {
-    // Try from sheet plano field
-    const plano = (subscriber?.plano || '').toLowerCase()
-    if (plano.includes('barba') && plano.includes('cabelo')) return PLANS.find(p => p.id === 'cabelo_barba')
-    if (plano.includes('barba')) return PLANS.find(p => p.id === 'barba')
-    if (plano.includes('tesoura') || plano.includes('cria')) return PLANS.find(p => p.id === 'maq_tesoura')
-    if (plano.includes('máquina') || plano.includes('maquina') || plano.includes('corte')) return PLANS.find(p => p.id === 'maquina')
+    const plano = (subscriber?.plano || '').toLowerCase().trim()
+    const planValue = subscriber?.planValue
 
-    // Fallback: try to detect from service descriptions in visits
+    // 1. Match exact Celcoin plan names
+    if (plano) {
+        if (plano.includes('cabelo e barba') || plano.includes('cabelo') && plano.includes('barba')) return PLANS.find(p => p.id === 'cabelo_barba')
+        if (plano.includes('barba ilimitada') || (plano.includes('barba') && !plano.includes('cabelo') && !plano.includes('cria'))) return PLANS.find(p => p.id === 'barba')
+        if (plano.includes('corte de cabelo ilimitado')) return PLANS.find(p => p.id === 'corte')
+        if (plano.includes('corte de cria') || plano.includes('cria')) return PLANS.find(p => p.id === 'cria')
+    }
+
+    // 2. Match by plan value from sheet
+    if (planValue) {
+        // R$ 140 = cabelo e barba (or cria at R$ 140 for combo clients like Jean Gomes)
+        if (planValue >= 13000 || planValue === 140) return PLANS.find(p => p.id === 'cabelo_barba')
+        if (planValue >= 9000 || planValue === 100) return PLANS.find(p => p.id === 'corte')
+        if (planValue >= 7000 || planValue === 80) {
+            // R$ 80 can be cria or barba - check plano text
+            if (plano.includes('barba')) return PLANS.find(p => p.id === 'barba')
+            return PLANS.find(p => p.id === 'cria')
+        }
+    }
+
+    // 3. Fallback: detect from service descriptions in visits
     if (visits && visits.length > 0) {
         const descs = visits.map(v => (v.servico_descricao || '').toLowerCase())
         if (descs.some(d => d.includes('barba') && (d.includes('corte') || d.includes('cabelo')))) return PLANS.find(p => p.id === 'cabelo_barba')
         if (descs.some(d => d.includes('barba'))) return PLANS.find(p => p.id === 'barba')
-        if (descs.some(d => d.includes('tes'))) return PLANS.find(p => p.id === 'maq_tesoura')
+        if (descs.some(d => d.includes('tes'))) return PLANS.find(p => p.id === 'corte')
     }
 
-    // Default to máquina
-    return PLANS.find(p => p.id === 'maquina')
+    // Default
+    return PLANS.find(p => p.id === 'cria')
 }
 
 const fmt = (v) => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })

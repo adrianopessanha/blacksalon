@@ -3,10 +3,11 @@ import { useState, useEffect } from 'react'
 const SHEET_ID = '1EEYaNhk_ziJKq1OAdCw8-t95gt93o8TB4aJVC5m3rfQ'
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`
 
-// Status que indica assinante ativo
+// Status que indica assinante ativo (Google Sheet webhook + Celcoin CSV)
 const ACTIVE_STATUSES = [
     'capturada na operadora',
-    'paga fora do sistema'
+    'paga fora do sistema',
+    'ativa'
 ]
 
 function parseCSV(text) {
