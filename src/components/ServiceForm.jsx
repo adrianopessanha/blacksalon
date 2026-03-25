@@ -87,7 +87,8 @@ export function ServiceForm() {
             const planos = newPresets.filter(p => p.label.includes('plano'))
             const avulsos = newPresets.filter(p => !p.label.includes('plano'))
             const onlyPlano = planos.length > 0 && avulsos.length === 0
-            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico', forma_pagamento: onlyPlano ? 'Assinante' : (formData.forma_pagamento === 'Assinante' && avulsos.length > 0 ? 'Dinheiro' : formData.forma_pagamento) })
+            const noPlano = planos.length === 0
+            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico', forma_pagamento: onlyPlano ? 'Assinante' : ((formData.forma_pagamento === 'Assinante' && (noPlano || avulsos.length > 0)) ? 'Dinheiro' : formData.forma_pagamento) })
         } else {
             setFormData({ ...formData, servico_descricao: '', valor_bruto: '' })
         }
@@ -505,7 +506,8 @@ export function ServiceForm() {
                                             )}
                                             <div className="grid grid-cols-3 gap-2">
                                                 {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
-                                                    const disabled = (onlyPlano && pm !== 'Assinante') || (isMixed && (pm === 'Assinante' || pm === 'Vale Presente'))
+                                                    const noPlano = planos.length === 0
+                                                    const disabled = (onlyPlano && pm !== 'Assinante') || (isMixed && (pm === 'Assinante' || pm === 'Vale Presente')) || (noPlano && pm === 'Assinante')
                                                     return (
                                                         <button type="button" key={pm}
                                                             onClick={() => !disabled && setFormData({ ...formData, forma_pagamento: pm })}
