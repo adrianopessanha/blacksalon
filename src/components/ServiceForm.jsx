@@ -412,12 +412,12 @@ export function ServiceForm() {
                                             )}
                                             <div className="grid grid-cols-3 gap-2">
                                                 {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
-                                                    const disabled = onlyPlano && pm !== 'Assinante'
+                                                    const disabled = (onlyPlano && pm !== 'Assinante') || (isMixed && (pm === 'Assinante' || pm === 'Vale Presente'))
                                                     return (
                                                         <button type="button" key={pm}
                                                             onClick={() => !disabled && setFormData({ ...formData, forma_pagamento: pm })}
                                                             disabled={disabled}
-                                                            className={`text-sm py-2.5 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm
+                                                            className={`text-sm py-2.5 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm && !disabled
                                                                 ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
                                                                 : disabled
                                                                     ? 'bg-gray-950 border-gray-800 text-gray-700 cursor-not-allowed opacity-40'
