@@ -1,11 +1,12 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { db, collection, addDoc, serverTimestamp, auth, signOut } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
-import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronRight } from 'lucide-react'
+import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronRight, Search, UserCheck, AlertTriangle } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
 import { BarberDailyView } from './BarberDailyView'
 import { BarberRanking } from './BarberRanking'
 import { useBarberStats } from '../hooks/useBarberStats'
+import { useSubscribers } from '../hooks/useSubscribers'
 
 // ==========================================
 // SERVICE PRESETS (quick-tap chips, multi-select)
@@ -44,6 +45,11 @@ export function ServiceForm() {
     const [selectedPresets, setSelectedPresets] = useState([])
     const [showCustomDesc, setShowCustomDesc] = useState(false)
     const isSubmittingRef = useRef(false)
+    const [subscriberSearch, setSubscriberSearch] = useState('')
+    const [showSubscriberDropdown, setShowSubscriberDropdown] = useState(false)
+
+    // Subscribers from Google Sheets
+    const { subscribers, loading: subsLoading, error: subsError } = useSubscribers()
 
     // Derived active barber
     const activeBarber = BARBERS.find(b => b.id === selectedBarberId) || loggedInBarber
@@ -99,6 +105,21 @@ export function ServiceForm() {
 
         if (!formData.valor_bruto) return alert('Preencha o valor do serviço')
         if (!formData.servico_descricao) return alert('Selecione ou descreva o serviço')
+
+        // Validar assinante: precisa selecionar cliente da lista
+        const planos = selectedPresets.filter(p => p.label.includes('plano'))
+        const avulsos = selectedPresets.filter(p => !p.label.includes('plano'))
+        const isMixed = planos.length > 0 && avulsos.length > 0
+        const needsSubscriber = formData.forma_pagamento === 'Assinante' || isMixed
+        if (needsSubscriber && !formData.cliente_nome) {
+            return alert('Selecione o assinante da lista para lançar com pagamento Assinante.')
+        }
+        if (needsSubscriber && subscribers.length > 0) {
+            const isValid = subscribers.some(s => s.name.toLowerCase() === formData.cliente_nome.toLowerCase())
+            if (!isValid) {
+                return alert(`"${formData.cliente_nome}" não está na lista de assinantes ativos. Selecione um assinante válido.`)
+            }
+        }
 
         const PAGAMENTOS_REAIS = ['Dinheiro', 'Pix', 'Crédito', 'Débito']
         if (['venda_vale', 'venda_assinatura'].includes(formData.tipo) && !PAGAMENTOS_REAIS.includes(formData.forma_pagamento)) {
@@ -385,15 +406,87 @@ export function ServiceForm() {
                             </div>
 
                             {/* Client Name */}
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">Cliente (opcional)</label>
-                                <input
-                                    placeholder="Nome do cliente"
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-gray-200 outline-none focus:border-cyan-500 text-sm"
-                                    value={formData.cliente_nome}
-                                    onChange={e => setFormData({ ...formData, cliente_nome: e.target.value })}
-                                />
-                            </div>
+                            {(() => {
+                                const isAssinante = formData.forma_pagamento === 'Assinante'
+                                const planos = selectedPresets.filter(p => p.label.includes('plano'))
+                                const avulsos = selectedPresets.filter(p => !p.label.includes('plano'))
+                                const isMixed = planos.length > 0 && avulsos.length > 0
+                                const needsSubscriber = isAssinante || isMixed
+
+                                if (needsSubscriber) {
+                                    const filtered = subscribers.filter(s =>
+                                        s.name.toLowerCase().includes(subscriberSearch.toLowerCase())
+                                    )
+                                    return (
+                                        <div className="relative">
+                                            <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
+                                                <UserCheck size={12} className="text-purple-400" />
+                                                Assinante <span className="text-red-400">*</span>
+                                                {subsLoading && <span className="text-gray-600 ml-1">(carregando...)</span>}
+                                                {subsError && <span className="text-red-500 ml-1 flex items-center gap-0.5"><AlertTriangle size={10} /> erro</span>}
+                                            </label>
+                                            {formData.cliente_nome ? (
+                                                <div className="flex items-center gap-2 bg-purple-900/20 border border-purple-700/50 rounded-lg py-2 px-3">
+                                                    <UserCheck size={16} className="text-purple-400" />
+                                                    <span className="text-purple-300 text-sm font-medium flex-1">{formData.cliente_nome}</span>
+                                                    <button type="button"
+                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '' }); setSubscriberSearch('') }}
+                                                        className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
+                                                    >trocar</button>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="relative">
+                                                        <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
+                                                        <input
+                                                            placeholder={`Buscar assinante (${subscribers.length} ativos)`}
+                                                            className="w-full bg-gray-950 border border-purple-700/50 rounded-lg py-2 pl-8 pr-3 text-gray-200 outline-none focus:border-purple-500 text-sm"
+                                                            value={subscriberSearch}
+                                                            onChange={e => { setSubscriberSearch(e.target.value); setShowSubscriberDropdown(true) }}
+                                                            onFocus={() => setShowSubscriberDropdown(true)}
+                                                        />
+                                                    </div>
+                                                    {showSubscriberDropdown && (
+                                                        <div className="absolute z-50 w-full mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-h-48 overflow-y-auto">
+                                                            {filtered.length === 0 ? (
+                                                                <div className="px-3 py-3 text-gray-500 text-xs text-center">
+                                                                    {subscriberSearch ? 'Nenhum assinante encontrado' : 'Digite para buscar'}
+                                                                </div>
+                                                            ) : (
+                                                                filtered.slice(0, 20).map((sub, i) => (
+                                                                    <button type="button" key={i}
+                                                                        onClick={() => {
+                                                                            setFormData({ ...formData, cliente_nome: sub.name })
+                                                                            setSubscriberSearch('')
+                                                                            setShowSubscriberDropdown(false)
+                                                                        }}
+                                                                        className="w-full text-left px-3 py-2 hover:bg-purple-900/20 transition-colors flex items-center justify-between gap-2 border-b border-gray-800/50 last:border-0"
+                                                                    >
+                                                                        <span className="text-sm text-gray-200 truncate">{sub.name}</span>
+                                                                        {sub.plano && <span className="text-[10px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded shrink-0">{sub.plano}</span>}
+                                                                    </button>
+                                                                ))
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                    )
+                                }
+
+                                return (
+                                    <div>
+                                        <label className="block text-xs text-gray-500 mb-1">Cliente (opcional)</label>
+                                        <input
+                                            placeholder="Nome do cliente"
+                                            className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-gray-200 outline-none focus:border-cyan-500 text-sm"
+                                            value={formData.cliente_nome}
+                                            onChange={e => setFormData({ ...formData, cliente_nome: e.target.value })}
+                                        />
+                                    </div>
+                                )
+                            })()}
 
                             {/* Payment Buttons */}
                             <div>
