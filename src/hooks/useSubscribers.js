@@ -159,7 +159,11 @@ export function useSubscribers() {
         }
 
         fetchSubscribers()
-        return () => { cancelled = true }
+
+        // Auto-refresh a cada 5 minutos
+        const interval = setInterval(fetchSubscribers, 5 * 60 * 1000)
+
+        return () => { cancelled = true; clearInterval(interval) }
     }, [])
 
     return { subscribers, loading, error }
