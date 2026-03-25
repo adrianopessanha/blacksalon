@@ -46,13 +46,14 @@ export function SubscriptionMonitor() {
     const [lancamentos, setLancamentos] = useState([])
     const [loading, setLoading] = useState(false)
 
-    // Fetch lancamentos for the selected month with Assinante payment
+    // Fetch lancamentos - broader range to cover individual billing cycles
     const fetchData = async () => {
         setLoading(true)
         try {
             const [y, m] = month.split('-').map(Number)
-            const start = new Date(y, m - 1, 1)
-            const end = new Date(y, m, 0, 23, 59, 59)
+            // Fetch from day 1 of previous month to end of next month to cover all cycles
+            const start = new Date(y, m - 2, 1)
+            const end = new Date(y, m, 31, 23, 59, 59)
 
             const q = query(
                 collection(db, 'lancamentos'),
@@ -72,22 +73,57 @@ export function SubscriptionMonitor() {
     useEffect(() => { fetchData() }, [month])
 
     // ==========================================
+    // CYCLE HELPERS
+    // ==========================================
+
+    // Calculate billing cycle window for a subscriber based on their billing day
+    const getCycleWindow = (billingDay, selectedMonth) => {
+        const [y, m] = selectedMonth.split('-').map(Number)
+        const day = billingDay || 1
+
+        // Cycle runs from billingDay of previous month to billingDay-1 of selected month
+        // Ex: billing day 15, selected month March 2026
+        // Cycle: Feb 15 → Mar 14
+        const cycleStart = new Date(y, m - 2, day, 0, 0, 0)
+        const cycleEnd = new Date(y, m - 1, day - 1, 23, 59, 59)
+
+        // Handle edge case: if billingDay > days in month, clamp to last day
+        if (cycleEnd.getDate() !== day - 1 && day > 1) {
+            cycleEnd.setDate(0) // Last day of previous month
+            cycleEnd.setHours(23, 59, 59)
+        }
+
+        return { cycleStart, cycleEnd }
+    }
+
+    const formatCycle = (cycleStart, cycleEnd) => {
+        const fmtDate = (d) => d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '')
+        return `${fmtDate(cycleStart)} → ${fmtDate(cycleEnd)}`
+    }
+
+    // ==========================================
     // COMPUTED ANALYTICS
     // ==========================================
     const analytics = useMemo(() => {
         if (subsLoading) return null
 
-        // Group visits by client name (normalized)
-        const visitsByClient = {}
-        lancamentos.forEach(l => {
-            const name = (l.cliente_nome || 'Não Informado').trim()
-            const key = name.toLowerCase()
-            if (!visitsByClient[key]) visitsByClient[key] = { name, visits: [], totalCommission: 0 }
-            visitsByClient[key].visits.push(l)
-            visitsByClient[key].totalCommission += parseFloat(l.comissao_barbeiro) || 0
-        })
+        // Pre-process lancamentos with dates
+        const lancamentosWithDates = lancamentos.map(l => ({
+            ...l,
+            dateObj: l.data?.seconds ? new Date(l.data.seconds * 1000) : null
+        })).filter(l => l.dateObj)
 
-        // Build per-subscriber analysis
+        // Group visits by client name within their individual cycle
+        const getVisitsForClient = (clientName, billingDay) => {
+            const { cycleStart, cycleEnd } = getCycleWindow(billingDay, month)
+            const key = clientName.toLowerCase()
+            return lancamentosWithDates.filter(l => {
+                const lName = (l.cliente_nome || '').trim().toLowerCase()
+                return lName === key && l.dateObj >= cycleStart && l.dateObj <= cycleEnd
+            })
+        }
+
+        // Build per-subscriber analysis with individual billing cycles
         const clientAnalysis = []
 
         // Active subscribers from sheet
@@ -95,8 +131,10 @@ export function SubscriptionMonitor() {
         subscribers.forEach(sub => {
             const key = sub.name.toLowerCase()
             processedKeys.add(key)
-            const clientVisits = visitsByClient[key]
-            const visits = clientVisits?.visits || []
+
+            const billingDay = sub.billingDay || 1
+            const visits = getVisitsForClient(sub.name, billingDay)
+            const { cycleStart, cycleEnd } = getCycleWindow(billingDay, month)
             const plan = detectPlan(sub, visits)
             const visitCount = visits.length
             const totalCommission = visits.reduce((s, v) => s + (parseFloat(v.comissao_barbeiro) || 0), 0)
@@ -112,6 +150,10 @@ export function SubscriptionMonitor() {
                 planoLabel: sub.plano || plan.label,
                 phone: sub.phone,
                 status: 'ativo',
+                billingDay,
+                cycleStart,
+                cycleEnd,
+                cycleLabel: formatCycle(cycleStart, cycleEnd),
                 visitCount,
                 totalCommission,
                 revenue,
@@ -126,22 +168,34 @@ export function SubscriptionMonitor() {
         })
 
         // Also include clients who used Assinante but aren't in the sheet (edge cases)
-        Object.entries(visitsByClient).forEach(([key, data]) => {
+        // Use default cycle (day 1) for unknown subscribers
+        const allClientNames = new Set(lancamentosWithDates.map(l => (l.cliente_nome || '').trim().toLowerCase()))
+        allClientNames.forEach(key => {
             if (processedKeys.has(key)) return
-            if (data.name === 'Não Informado') return
-            const plan = detectPlan(null, data.visits)
-            const visitCount = data.visits.length
-            const totalCommission = data.totalCommission
+            if (!key || key === 'não informado') return
+
+            const visits = getVisitsForClient(key, 1)
+            if (visits.length === 0) return
+
+            const { cycleStart, cycleEnd } = getCycleWindow(1, month)
+            const clientName = visits[0].cliente_nome?.trim() || key
+            const plan = detectPlan(null, visits)
+            const visitCount = visits.length
+            const totalCommission = visits.reduce((s, v) => s + (parseFloat(v.comissao_barbeiro) || 0), 0)
             const revenue = plan.value
             const costs = plan.fee + totalCommission
             const profit = revenue - costs
             const breakEven = Math.floor((revenue - plan.fee) / plan.commission)
 
             clientAnalysis.push({
-                name: data.name,
+                name: clientName,
                 plan,
                 planoLabel: plan.label,
                 status: 'sem_cadastro',
+                billingDay: 1,
+                cycleStart,
+                cycleEnd,
+                cycleLabel: formatCycle(cycleStart, cycleEnd),
                 visitCount,
                 totalCommission,
                 revenue,
@@ -150,7 +204,7 @@ export function SubscriptionMonitor() {
                 profit,
                 breakEven,
                 isOverLimit: visitCount > breakEven,
-                visits: data.visits,
+                visits,
                 isFromSheet: false
             })
         })
@@ -317,6 +371,7 @@ export function SubscriptionMonitor() {
                                     <tr>
                                         <th className="px-4 py-3 font-medium">Assinante</th>
                                         <th className="px-3 py-3 font-medium">Plano</th>
+                                        <th className="px-3 py-3 font-medium">Ciclo</th>
                                         <th className="px-3 py-3 font-medium text-center">Visitas</th>
                                         <th className="px-3 py-3 font-medium text-center">Limite</th>
                                         <th className="px-3 py-3 font-medium text-right">Receita</th>
@@ -347,6 +402,12 @@ export function SubscriptionMonitor() {
                                                     <span className="text-xs bg-purple-900/30 text-purple-400 px-2 py-0.5 rounded border border-purple-800/30">
                                                         {client.planoLabel}
                                                     </span>
+                                                </td>
+                                                <td className="px-3 py-2.5">
+                                                    <span className="text-[10px] text-gray-500 whitespace-nowrap">
+                                                        {client.cycleLabel}
+                                                    </span>
+                                                    <div className="text-[9px] text-gray-600">dia {client.billingDay}</div>
                                                 </td>
                                                 <td className={`px-3 py-2.5 text-center ${visitColor}`}>
                                                     {client.visitCount}x

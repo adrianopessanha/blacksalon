@@ -85,6 +85,8 @@ export function useSubscribers() {
                 const statusIdx = header.findIndex(h => h.includes('status'))
                 const planoIdx = header.findIndex(h => h.includes('plano'))
                 const phoneIdx = header.findIndex(h => h.includes('telefone'))
+                const contractIdx = header.findIndex(h => h.includes('inicio') || h.includes('contrato'))
+                const valorIdx = header.findIndex(h => h.includes('valor'))
 
                 if (nameIdx === -1 || statusIdx === -1) {
                     throw new Error('Colunas "Nome" ou "Status" não encontradas')
@@ -106,13 +108,35 @@ export function useSubscribers() {
 
                     const isActive = ACTIVE_STATUSES.some(s => status.includes(s))
 
+                    // Parse billing cycle day from contract start date
+                    const contractRaw = contractIdx >= 0 ? (row[contractIdx] || '').replace(/[}"]/g, '').trim() : ''
+                    let billingDay = null
+                    if (contractRaw) {
+                        // Formats: "30/07/2025" or "2025-05-30 18:03:09"
+                        if (contractRaw.includes('/')) {
+                            const parts = contractRaw.split('/')
+                            billingDay = parseInt(parts[0]) || null
+                        } else if (contractRaw.includes('-')) {
+                            const parts = contractRaw.split(/[-T\s]/)
+                            billingDay = parseInt(parts[2]) || null
+                        }
+                    }
+
+                    // Parse plan value
+                    const valorRaw = valorIdx >= 0 ? (row[valorIdx] || '').replace(/[}"]/g, '').trim() : ''
+                    const planValue = parseInt(valorRaw) || null
+
                     // Always update - last row is most recent
+                    const existing = subscriberMap.get(cleanName.toLowerCase())
                     subscriberMap.set(cleanName.toLowerCase(), {
                         name: cleanName,
                         plano: (row[planoIdx] || '').replace(/[}"]/g, '').trim(),
                         phone: (row[phoneIdx] || '').replace(/[}"]/g, '').trim(),
                         status: isActive ? 'ativo' : 'inativo',
-                        rawStatus: (row[statusIdx] || '').trim()
+                        rawStatus: (row[statusIdx] || '').trim(),
+                        billingDay: billingDay || (existing?.billingDay) || null,
+                        planValue: planValue || (existing?.planValue) || null,
+                        contractDate: contractRaw
                     })
                 }
 
