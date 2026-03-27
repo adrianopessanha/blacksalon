@@ -92,6 +92,7 @@ export function useSubscribers() {
                 const statusIdx = header.findIndex(h => h.includes('status'))
                 const planoIdx = header.findIndex(h => h.includes('plano'))
                 const phoneIdx = header.findIndex(h => h.includes('telefone'))
+                const emailIdx = header.findIndex(h => h.includes('email'))
                 const contractIdx = header.findIndex(h => h.includes('inicio') || h.includes('contrato'))
                 const valorIdx = header.findIndex(h => h.includes('valor'))
                 const codeIdx = header.findIndex(h => h.includes('c_digo') || h.includes('codigo') || h === 'c_digo')
@@ -155,6 +156,7 @@ export function useSubscribers() {
                         code: code,
                         plano: (row[planoIdx] || '').replace(/[}"]/g, '').trim(),
                         phone: (row[phoneIdx] || '').replace(/[}"]/g, '').trim(),
+                        email: emailIdx !== -1 ? (row[emailIdx] || '').replace(/[}"]/g, '').trim() : '',
                         status: isActive ? 'ativo' : (isInactive ? 'inativo' : 'inativo'),
                         rawStatus: (row[statusIdx] || '').trim(),
                         billingDay: billingDay || (existing?.billingDay) || null,

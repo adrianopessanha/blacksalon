@@ -77,59 +77,82 @@ export function ClubLookup() {
                     </div>
                 )}
 
-                {filtered.map((client, i) => (
-                    <div 
-                        key={i} 
-                        className={`bg-gray-900 border rounded-2xl p-4 transition-all animate-in fade-in slide-in-from-bottom-2 duration-300 ${
-                            client.status === 'ativo' 
-                            ? 'border-emerald-500/30 bg-emerald-950/5' 
-                            : 'border-red-900/30 bg-red-950/5'
-                        }`}
-                    >
-                        <div className="flex items-start justify-between gap-4">
-                            <div className="flex-1">
-                                <h3 className="text-lg font-bold text-white mb-1 leading-tight">{client.name}</h3>
-                                <div className="space-y-1">
-                                    {client.phone && (
-                                        <div className="flex items-center gap-2 text-sm text-gray-400">
-                                            <Phone size={14} className="text-gray-600" /> {client.phone}
+                {filtered.map((client, i) => {
+                    const isAtivo = client.status === 'ativo'
+                    
+                    // Simple logic to find the NEXT billing date
+                    const now = new Date()
+                    const bDay = client.billingDay || 1
+                    let nextBilling = new Date(now.getFullYear(), now.getMonth(), bDay)
+                    if (now.getDate() >= bDay) {
+                        nextBilling.setMonth(nextBilling.getMonth() + 1)
+                    }
+                    const nextBillingStr = nextBilling.toLocaleDateString('pt-BR', { 
+                        day: '2-digit', 
+                        month: '2-digit', 
+                        year: 'numeric' 
+                    })
+
+                    return (
+                        <div 
+                            key={i} 
+                            className={`bg-gray-900 border rounded-2xl p-4 transition-all animate-in fade-in slide-in-from-bottom-2 duration-300 ${
+                                isAtivo 
+                                ? 'border-emerald-500/30 bg-emerald-950/5' 
+                                : 'border-red-900/30 bg-red-950/5'
+                            }`}
+                        >
+                            <div className="flex items-start justify-between gap-4">
+                                <div className="flex-1">
+                                    <h3 className="text-lg font-bold text-white mb-1 leading-tight">{client.name}</h3>
+                                    <div className="space-y-1">
+                                        {client.email && (
+                                            <div className="flex items-center gap-2 text-[13px] text-gray-400">
+                                                <span className="text-gray-600 font-medium">E-mail:</span> {client.email}
+                                            </div>
+                                        )}
+                                        <div className="flex items-center gap-2 text-[13px] text-gray-400">
+                                            <span className="text-gray-600 font-medium">Vencimento:</span> 
+                                            <span className={isAtivo ? 'text-emerald-400/80' : 'text-red-400/80'}>
+                                                {nextBillingStr}
+                                            </span>
                                         </div>
-                                    )}
-                                    <div className="flex items-center gap-2 text-sm text-gray-400">
-                                        <CreditCard size={14} className="text-gray-600" /> {client.plano || 'Plano não identificado'}
+                                        <div className="flex items-center gap-2 text-[13px] text-gray-500 italic">
+                                            {client.plano || 'Plano não identificado'}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            <div className="text-right">
-                                {client.status === 'ativo' ? (
-                                    <div className="flex flex-col items-end">
-                                        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-900/40 text-emerald-400 rounded-full border border-emerald-500/30 text-xs font-black uppercase tracking-wider mb-1 shadow-lg shadow-emerald-900/20">
-                                            <UserCheck size={14} /> ATIVO
+                                <div className="text-right">
+                                    {isAtivo ? (
+                                        <div className="flex flex-col items-end">
+                                            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-900/40 text-emerald-400 rounded-full border border-emerald-500/30 text-xs font-black uppercase tracking-wider mb-1 shadow-lg shadow-emerald-900/20">
+                                                <UserCheck size={14} /> ATIVO
+                                            </div>
+                                            <span className="text-[9px] text-emerald-600 font-bold uppercase tracking-widest leading-none">Pode realizar o serviço</span>
                                         </div>
-                                        <span className="text-[9px] text-emerald-600 font-bold uppercase tracking-widest leading-none">Pode realizar o serviço</span>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col items-end">
-                                        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/40 text-red-500 rounded-full border border-red-800/30 text-xs font-black uppercase tracking-wider mb-1">
-                                            <UserX size={14} /> INATIVO
+                                    ) : (
+                                        <div className="flex flex-col items-end">
+                                            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/40 text-red-500 rounded-full border border-red-800/30 text-xs font-black uppercase tracking-wider mb-1">
+                                                <UserX size={14} /> INATIVO
+                                            </div>
+                                            <span className="text-[9px] text-red-700 font-bold uppercase tracking-widest leading-none">Consultar recepção</span>
                                         </div>
-                                        <span className="text-[9px] text-red-700 font-bold uppercase tracking-widest leading-none">Consultar recepção</span>
-                                    </div>
-                                )}
+                                    )}
+                                </div>
                             </div>
+                            
+                            {client.rawStatus && (
+                                <div className="mt-4 pt-3 border-t border-gray-800/50 flex justify-between items-center bg-gray-950/20 -mx-4 px-4 -mb-4 rounded-b-2xl py-2">
+                                    <span className="text-[10px] text-gray-600 uppercase tracking-widest font-medium">Status detalhado Celcoin</span>
+                                    <span className={`text-[10px] font-bold ${isAtivo ? 'text-emerald-500/60' : 'text-red-500/60'}`}>
+                                        {client.rawStatus}
+                                    </span>
+                                </div>
+                            )}
                         </div>
-                        
-                        {client.rawStatus && (
-                            <div className="mt-4 pt-3 border-t border-gray-800/50 flex justify-between items-center bg-gray-950/20 -mx-4 px-4 -mb-4 rounded-b-2xl py-2">
-                                <span className="text-[10px] text-gray-600 uppercase tracking-widest font-medium">Status detalhado</span>
-                                <span className={`text-[10px] font-bold ${client.status === 'ativo' ? 'text-emerald-500/60' : 'text-red-500/60'}`}>
-                                    {client.rawStatus}
-                                </span>
-                            </div>
-                        )}
-                    </div>
-                ))}
+                    )
+                })}
 
                 {search.length < 2 && search.length > 0 && (
                     <div className="text-center py-4 text-gray-600 text-xs">
