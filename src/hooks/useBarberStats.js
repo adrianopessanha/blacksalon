@@ -43,6 +43,7 @@ export function useBarberStats(barberId, targetDateStr) {
             let tCount = 0, tValue = 0, tComm = 0
             let mComm = 0, mProduction = 0, mAdvances = 0
             let mSobrancelha = 0, mProducts = 0, mSubscribers = 0
+            let mAvulsoCount = 0, mAvulsoCommission = 0, mPlanCommission = 0, mCrossSellCount = 0
             let todayList = []
 
             const docs = []
@@ -77,7 +78,19 @@ export function useBarberStats(barberId, targetDateStr) {
                             const desc = (data.servico_descricao || '').toLowerCase()
                             if (desc.includes('sobrancelha')) mSobrancelha++
                             if (data.tipo === 'produto') mProducts++
-                            if (data.forma_pagamento === 'Assinante') mSubscribers++
+                            if (data.forma_pagamento === 'Assinante') {
+                                mSubscribers++
+                                mPlanCommission += (data.comissao_barbeiro || 0)
+                            }
+                            // Avulso services (non-plan, non-product)
+                            if (data.tipo === 'servico' && data.forma_pagamento !== 'Assinante') {
+                                mAvulsoCount++
+                                mAvulsoCommission += (data.comissao_barbeiro || 0)
+                            }
+                            // Cross-sell detection (multiple services in one entry)
+                            if (data.tipo === 'servico' && desc.includes(' + ')) {
+                                mCrossSellCount++
+                            }
                         }
                     }
 
@@ -120,6 +133,10 @@ export function useBarberStats(barberId, targetDateStr) {
                 monthSobrancelhaCount: mSobrancelha,
                 monthProductCount: mProducts,
                 monthSubscriberCount: mSubscribers,
+                monthAvulsoCount: mAvulsoCount,
+                monthAvulsoCommission: mAvulsoCommission,
+                monthPlanCommission: mPlanCommission,
+                monthCrossSellCount: mCrossSellCount,
             })
             setLoading(false)
         }, (error) => {

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<body>
+<canvas id="c192" width="192" height="192"></canvas>
+<canvas id="c512" width="512" height="512"></canvas>
+<script>
+function draw(canvas, size) {
+    const ctx = canvas.getContext('2d');
+    const r = size * 0.16;
+
+    // Background
+    ctx.fillStyle = '#0f172a';
+    ctx.beginPath();
+    ctx.roundRect(0, 0, size, size, r);
+    ctx.fill();
+
+    // Text "BS"
+    ctx.fillStyle = '#06b6d4';
+    ctx.font = `900 ${size * 0.47}px "Arial Black", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('BS', size / 2, size * 0.48);
+
+    // Underline
+    ctx.fillStyle = 'rgba(6, 182, 212, 0.5)';
+    const barW = size * 0.69, barH = size * 0.02;
+    ctx.beginPath();
+    ctx.roundRect((size - barW) / 2, size * 0.73, barW, barH, barH / 2);
+    ctx.fill();
+
+    // Download
+    canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `icon-${size}.png`;
+        a.click();
+    });
+}
+draw(document.getElementById('c192'), 192);
+draw(document.getElementById('c512'), 512);
+</script>
+<p>Icons downloading...</p>
+</body>
+</html>

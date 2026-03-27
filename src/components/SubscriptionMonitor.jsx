@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { db, collection, query, where, getDocs } from '../firebase'
-import { Timestamp } from 'firebase/firestore'
-import { Users, DollarSign, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Target, CreditCard, ChevronDown, ChevronUp, RefreshCw, BarChart3 } from 'lucide-react'
+import { Timestamp, doc, updateDoc } from 'firebase/firestore'
+import { Users, DollarSign, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Target, CreditCard, ChevronDown, ChevronUp, RefreshCw, BarChart3, Pencil, X, Check, Search } from 'lucide-react'
 import { useSubscribers } from '../hooks/useSubscribers'
 
 // ==========================================
@@ -68,20 +68,21 @@ export function SubscriptionMonitor() {
         setLoading(true)
         try {
             const [y, m] = month.split('-').map(Number)
-            // Fetch from day 1 of previous month to end of next month to cover all cycles
-            const start = new Date(y, m - 2, 1)
-            const end = new Date(y, m, 31, 23, 59, 59)
+            // Fetch from day 1 of selected month to end of next month to cover all individual cycles
+            const start = new Date(y, m - 1, 1)
+            const end = new Date(y, m + 1, 0, 23, 59, 59)
 
             const q = query(
                 collection(db, 'lancamentos'),
-                where('forma_pagamento', '==', 'Assinante'),
                 where('data', '>=', Timestamp.fromDate(start)),
                 where('data', '<=', Timestamp.fromDate(end))
             )
             const snapshot = await getDocs(q)
-            setLancamentos(snapshot.docs.map(d => ({ id: d.id, ...d.data() })))
+            // Filter Assinante client-side to avoid needing composite index
+            setLancamentos(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter(l => l.forma_pagamento === 'Assinante'))
         } catch (e) {
             console.error('Erro ao buscar lançamentos:', e)
+            alert('Erro ao buscar lançamentos: ' + e.message)
         } finally {
             setLoading(false)
         }
@@ -94,21 +95,41 @@ export function SubscriptionMonitor() {
     // ==========================================
 
     // Calculate billing cycle window for a subscriber based on their billing day
+    // Shows the ACTIVE cycle: if billing day hasn't happened yet this month,
+    // show the previous cycle (last month's billing day → this month's billing day - 1)
     const getCycleWindow = (billingDay, selectedMonth) => {
-        const [y, m] = selectedMonth.split('-').map(Number)
+        const [y, m] = selectedMonth.split('-').map(Number) // m is 1-indexed
         const day = billingDay || 1
 
-        // Cycle runs from billingDay of previous month to billingDay-1 of selected month
-        // Ex: billing day 15, selected month March 2026
-        // Cycle: Feb 15 → Mar 14
-        const cycleStart = new Date(y, m - 2, day, 0, 0, 0)
-        const cycleEnd = new Date(y, m - 1, day - 1, 23, 59, 59)
-
-        // Handle edge case: if billingDay > days in month, clamp to last day
-        if (cycleEnd.getDate() !== day - 1 && day > 1) {
-            cycleEnd.setDate(0) // Last day of previous month
-            cycleEnd.setHours(23, 59, 59)
+        // Clamp day to max days in a given month (e.g. day 31 in Feb → 28)
+        const safeDate = (year, month0, d) => {
+            const maxDay = new Date(year, month0 + 1, 0).getDate()
+            return new Date(year, month0, Math.min(d, maxDay))
         }
+
+        // Reference: use today for current month, last day for past/future months
+        const now = new Date()
+        const isCurrentMonth = y === now.getFullYear() && m === (now.getMonth() + 1)
+        const refDay = isCurrentMonth ? now.getDate() : new Date(y, m, 0).getDate()
+
+        let cycleStart, cycleEnd
+
+        if (day > refDay) {
+            // Billing day hasn't happened this month → show previous cycle
+            // Ex: billing day 31, today Mar 25 → cycle: Feb 28 → Mar 30
+            cycleStart = safeDate(y, m - 2, day) // prev month billing day (0-indexed)
+            const thisMonthBilling = safeDate(y, m - 1, day)
+            cycleEnd = new Date(thisMonthBilling.getTime() - 86400000) // day before
+        } else {
+            // Billing day already passed → show current cycle
+            // Ex: billing day 13, today Mar 25 → cycle: Mar 13 → Apr 12
+            cycleStart = safeDate(y, m - 1, day) // this month billing day
+            const nextMonthBilling = safeDate(y, m, day)
+            cycleEnd = new Date(nextMonthBilling.getTime() - 86400000) // day before
+        }
+
+        cycleStart.setHours(0, 0, 0, 0)
+        cycleEnd.setHours(23, 59, 59, 999)
 
         return { cycleStart, cycleEnd }
     }
@@ -130,13 +151,19 @@ export function SubscriptionMonitor() {
             dateObj: l.data?.seconds ? new Date(l.data.seconds * 1000) : null
         })).filter(l => l.dateObj)
 
-        // Group visits by client name within their individual cycle
-        const getVisitsForClient = (clientName, billingDay) => {
+        // Group visits by subscriber code (preferred) or client name within their individual cycle
+        const getVisitsForClient = (subscriber, billingDay) => {
             const { cycleStart, cycleEnd } = getCycleWindow(billingDay, month)
-            const key = clientName.toLowerCase()
+            const code = subscriber.code || null
+            const nameKey = subscriber.name.toLowerCase()
             return lancamentosWithDates.filter(l => {
+                if (l.dateObj < cycleStart || l.dateObj > cycleEnd) return false
+                // Match by subscriber code first (reliable), then fallback to name
+                if (code && l.subscriber_code) {
+                    return l.subscriber_code === code
+                }
                 const lName = (l.cliente_nome || '').trim().toLowerCase()
-                return lName === key && l.dateObj >= cycleStart && l.dateObj <= cycleEnd
+                return lName === nameKey
             })
         }
 
@@ -144,13 +171,15 @@ export function SubscriptionMonitor() {
         const clientAnalysis = []
 
         // Active subscribers from sheet
-        const processedKeys = new Set()
+        const processedNames = new Set()
+        const processedCodes = new Set()
         subscribers.forEach(sub => {
             const key = sub.name.toLowerCase()
-            processedKeys.add(key)
+            processedNames.add(key)
+            if (sub.code) processedCodes.add(sub.code)
 
             const billingDay = sub.billingDay || 1
-            const visits = getVisitsForClient(sub.name, billingDay)
+            const visits = getVisitsForClient(sub, billingDay)
             const { cycleStart, cycleEnd } = getCycleWindow(billingDay, month)
             const plan = detectPlan(sub, visits)
             const visitCount = visits.length
@@ -163,6 +192,7 @@ export function SubscriptionMonitor() {
 
             clientAnalysis.push({
                 name: sub.name,
+                code: sub.code || null,
                 plan,
                 planoLabel: sub.plano || plan.label,
                 phone: sub.phone,
@@ -188,10 +218,15 @@ export function SubscriptionMonitor() {
         // Use default cycle (day 1) for unknown subscribers
         const allClientNames = new Set(lancamentosWithDates.map(l => (l.cliente_nome || '').trim().toLowerCase()))
         allClientNames.forEach(key => {
-            if (processedKeys.has(key)) return
+            if (processedNames.has(key)) return
             if (!key || key === 'não informado') return
+            // Check if any lancamento with this name has a code that was already processed
+            const hasProcessedCode = lancamentosWithDates.some(l =>
+                (l.cliente_nome || '').trim().toLowerCase() === key && l.subscriber_code && processedCodes.has(l.subscriber_code)
+            )
+            if (hasProcessedCode) return
 
-            const visits = getVisitsForClient(key, 1)
+            const visits = getVisitsForClient({ name: key, code: null }, 1)
             if (visits.length === 0) return
 
             const { cycleStart, cycleEnd } = getCycleWindow(1, month)
@@ -279,6 +314,33 @@ export function SubscriptionMonitor() {
     // ==========================================
     const [expandedClient, setExpandedClient] = useState(null)
     const [showAllClients, setShowAllClients] = useState(false)
+    const [editingClient, setEditingClient] = useState(null) // { name, visits }
+    const [editSearch, setEditSearch] = useState('')
+    const [editLoading, setEditLoading] = useState(false)
+    const [clientSearch, setClientSearch] = useState('')
+
+    // Link lancamentos from one client name to a subscriber from the sheet
+    const handleLinkSubscriber = async (oldClient, subscriber) => {
+        if (!oldClient?.visits?.length) return
+        setEditLoading(true)
+        try {
+            const promises = oldClient.visits.map(v =>
+                updateDoc(doc(db, 'lancamentos', v.id), {
+                    cliente_nome: subscriber.name,
+                    subscriber_code: subscriber.code || null
+                })
+            )
+            await Promise.all(promises)
+            alert(`${oldClient.visits.length} lançamento(s) vinculados a "${subscriber.name}" (${subscriber.code ? '#' + subscriber.code : ''})`)
+            setEditingClient(null)
+            setEditSearch('')
+            fetchData() // Refresh
+        } catch (e) {
+            alert('Erro ao vincular: ' + e.message)
+        } finally {
+            setEditLoading(false)
+        }
+    }
 
     // ==========================================
     // RENDER
@@ -382,6 +444,24 @@ export function SubscriptionMonitor() {
                             <span className="text-xs text-gray-500">{analytics.clients.length} assinantes</span>
                         </div>
 
+                        {/* Search bar */}
+                        <div className="px-4 py-3 border-b border-gray-800">
+                            <div className="relative">
+                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                                <input
+                                    placeholder="Buscar assinante pelo nome..."
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 pl-9 pr-9 text-sm text-gray-200 outline-none focus:border-purple-500 placeholder-gray-600"
+                                    value={clientSearch}
+                                    onChange={e => setClientSearch(e.target.value)}
+                                />
+                                {clientSearch && (
+                                    <button onClick={() => setClientSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
+                                        <X size={14} />
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
                         <div className="overflow-x-auto">
                             <table className="w-full text-left text-sm">
                                 <thead className="bg-gray-950 text-gray-500 text-xs">
@@ -397,21 +477,87 @@ export function SubscriptionMonitor() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-800/50 text-gray-300">
-                                    {(showAllClients ? analytics.clients : analytics.clients.slice(0, 15)).map((client, i) => {
+                                    {(() => {
+                                        const filtered = clientSearch
+                                            ? analytics.clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
+                                            : analytics.clients
+                                        const visible = clientSearch ? filtered : (showAllClients ? filtered : filtered.slice(0, 15))
+                                        return visible
+                                    })().map((client, i) => {
                                         const profitColor = client.profit > 0 ? 'text-green-400' : client.profit < 0 ? 'text-red-400' : 'text-gray-400'
                                         const visitColor = client.isOverLimit ? 'text-red-400 font-bold' : client.visitCount >= client.breakEven ? 'text-yellow-400 font-medium' : 'text-green-400'
                                         const isExpanded = expandedClient === client.name
 
                                         return (
-                                            <tr key={i}
+                                            <React.Fragment key={i}>
+                                            <tr
                                                 onClick={() => setExpandedClient(isExpanded ? null : client.name)}
-                                                className="hover:bg-gray-800/30 transition-colors cursor-pointer">
+                                                className={`hover:bg-gray-800/30 transition-colors cursor-pointer ${isExpanded ? 'bg-gray-800/20' : ''}`}>
                                                 <td className="px-4 py-2.5">
                                                     <div className="flex items-center gap-2">
                                                         <div className={`w-2 h-2 rounded-full shrink-0 ${client.profit > 0 ? 'bg-green-500' : client.profit < 0 ? 'bg-red-500' : 'bg-gray-500'}`} />
-                                                        <div>
-                                                            <div className="font-medium text-sm">{client.name}</div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="font-medium text-sm truncate">{client.name}</span>
+                                                                {client.visitCount > 0 && (
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation()
+                                                                            setEditingClient(editingClient?.name === client.name ? null : client)
+                                                                            setEditSearch('')
+                                                                        }}
+                                                                        className="p-0.5 rounded hover:bg-purple-900/40 text-gray-600 hover:text-purple-400 transition-colors shrink-0"
+                                                                        title="Vincular ao assinante correto"
+                                                                    >
+                                                                        <Pencil size={12} />
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                            {client.code && <span className="text-[10px] text-gray-500">#{client.code}</span>}
                                                             {!client.isFromSheet && <span className="text-[10px] text-yellow-500">sem cadastro</span>}
+
+                                                            {/* Edit dropdown */}
+                                                            {editingClient?.name === client.name && (
+                                                                <div className="mt-2 bg-gray-950 border border-purple-700/50 rounded-lg p-2 shadow-xl" onClick={e => e.stopPropagation()}>
+                                                                    <div className="flex items-center gap-1 mb-2">
+                                                                        <Search size={12} className="text-gray-500" />
+                                                                        <input
+                                                                            autoFocus
+                                                                            placeholder="Buscar assinante..."
+                                                                            className="flex-1 bg-transparent text-xs text-gray-200 outline-none placeholder-gray-600"
+                                                                            value={editSearch}
+                                                                            onChange={e => setEditSearch(e.target.value)}
+                                                                        />
+                                                                        <button onClick={() => { setEditingClient(null); setEditSearch('') }} className="text-gray-600 hover:text-red-400">
+                                                                            <X size={14} />
+                                                                        </button>
+                                                                    </div>
+                                                                    <div className="max-h-40 overflow-y-auto space-y-0.5">
+                                                                        {subscribers
+                                                                            .filter(s => !editSearch || s.name.toLowerCase().includes(editSearch.toLowerCase()) || (s.code && s.code.includes(editSearch)))
+                                                                            .slice(0, 15)
+                                                                            .map((sub, si) => (
+                                                                                <button key={si}
+                                                                                    disabled={editLoading}
+                                                                                    onClick={() => handleLinkSubscriber(client, sub)}
+                                                                                    className="w-full text-left px-2 py-1.5 rounded hover:bg-purple-900/30 text-xs text-gray-300 flex items-center justify-between gap-2 transition-colors disabled:opacity-50"
+                                                                                >
+                                                                                    <span className="truncate">{sub.name}</span>
+                                                                                    <span className="text-[10px] text-gray-600 shrink-0">
+                                                                                        {sub.code && `#${sub.code}`} {sub.plano && `· ${sub.plano}`}
+                                                                                    </span>
+                                                                                </button>
+                                                                            ))
+                                                                        }
+                                                                        {subscribers.filter(s => !editSearch || s.name.toLowerCase().includes(editSearch.toLowerCase())).length === 0 && (
+                                                                            <div className="text-[10px] text-gray-600 text-center py-2">Nenhum assinante encontrado</div>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="text-[9px] text-gray-600 mt-1 pt-1 border-t border-gray-800">
+                                                                        {client.visitCount} lançamento(s) serão vinculados
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </td>
@@ -439,8 +585,54 @@ export function SubscriptionMonitor() {
                                                     {client.isOverLimit && <span className="ml-1 text-[10px]">⚠</span>}
                                                 </td>
                                             </tr>
-                                        )
-                                    })}
+                                            {/* Expanded visit details */}
+                                            {isExpanded && client.visits.length > 0 && (
+                                                <tr className="bg-gray-950/80">
+                                                    <td colSpan={8} className="px-4 py-3">
+                                                        <div className="ml-4 border-l-2 border-purple-800/40 pl-4">
+                                                            <div className="text-[10px] text-gray-500 font-medium mb-2 uppercase tracking-wider">
+                                                                Atendimentos no ciclo ({client.visits.length})
+                                                            </div>
+                                                            <div className="space-y-1.5">
+                                                                {client.visits
+                                                                    .sort((a, b) => (b.dateObj || 0) - (a.dateObj || 0))
+                                                                    .map((v, vi) => {
+                                                                        const d = v.dateObj
+                                                                        const dateStr = d ? `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}` : '??'
+                                                                        const dayName = d ? ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'][d.getDay()] : ''
+                                                                        return (
+                                                                            <div key={vi} className="flex items-center gap-3 text-xs py-1 px-2 rounded hover:bg-gray-800/40 transition-colors">
+                                                                                <span className="text-gray-500 w-16 shrink-0">{dateStr} <span className="text-gray-600">{dayName}</span></span>
+                                                                                <span className="text-gray-300 flex-1 truncate">{v.servico_descricao || 'Serviço'}</span>
+                                                                                <span className="text-purple-400/70 text-[11px] w-28 truncate text-right">{v.barbeiro_nome || '-'}</span>
+                                                                                <span className="text-gray-500 w-20 text-right">{fmt(parseFloat(v.comissao_barbeiro) || 0)}</span>
+                                                                            </div>
+                                                                        )
+                                                                    })
+                                                                }
+                                                            </div>
+                                                            <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-800/50 text-[10px]">
+                                                                <span className="text-gray-600">
+                                                                    Receita {fmt(client.revenue)} − Taxa {fmt(client.fee)} − Comissões {fmt(client.totalCommission)}
+                                                                </span>
+                                                                <span className={`font-bold ${client.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                                    = {fmt(client.profit)}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            {isExpanded && client.visits.length === 0 && (
+                                                <tr className="bg-gray-950/80">
+                                                    <td colSpan={8} className="px-8 py-3 text-xs text-gray-600 italic">
+                                                        Nenhum atendimento neste ciclo
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </React.Fragment>
+                                    )
+                                })}
                                 </tbody>
                             </table>
                         </div>

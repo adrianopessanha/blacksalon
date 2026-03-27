@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import { db, collection, addDoc, serverTimestamp, deleteDoc, doc } from '../firebase'
-import { DollarSign, TrendingUp, Clock, Wallet, CheckCircle, Trash2, MessageCircle, ShoppingBag, Users, Sparkles } from 'lucide-react'
-
-const AVG_COMMISSION_VALUE = 30
+import { DollarSign, TrendingUp, Clock, Wallet, CheckCircle, Trash2, MessageCircle, ShoppingBag, Users, Sparkles, Pencil, Target, Scissors, X } from 'lucide-react'
 
 export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, stats, statsLoading, dynamicGoal }) {
     const todayDay = new Date().getDay()
@@ -13,9 +11,24 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
     const [processing, setProcessing] = useState(false)
     const [deleteConfirmation, setDeleteConfirmation] = useState(null)
     const [closeCommissionConfirmation, setCloseCommissionConfirmation] = useState(false)
+    const [editingGoal, setEditingGoal] = useState(false)
+    const [goalInput, setGoalInput] = useState('')
 
     const targetDateStr = selectedDate || new Date().toISOString().split('T')[0]
-    const MONTHLY_TARGET = dynamicGoal || 2000
+
+    // Meta configurável via localStorage (default R$3.000)
+    const goalKey = `meta_goal_${barberId}`
+    const savedGoal = typeof window !== 'undefined' ? parseFloat(localStorage.getItem(goalKey)) : NaN
+    const MONTHLY_TARGET = !isNaN(savedGoal) && savedGoal > 0 ? savedGoal : 3000
+
+    const handleSaveGoal = () => {
+        const val = parseFloat(goalInput)
+        if (val > 0) {
+            localStorage.setItem(goalKey, val)
+            setEditingGoal(false)
+            setGoalInput('')
+        }
+    }
 
     // ==========================================
     // ACTION HANDLERS
@@ -143,7 +156,6 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
     const currentMonthProduction = stats.monthProduction
     const remainingBalance = Math.max(0, MONTHLY_TARGET - currentMonthProduction)
     const dailyGoal = remainingWorkDays > 0 ? (remainingBalance / remainingWorkDays) : 0
-    const servicesNeeded = Math.ceil(dailyGoal / AVG_COMMISSION_VALUE)
 
     const todayProduction = stats.todayServices.reduce((acc, curr) => {
         const val = parseFloat(curr.comissao_barbeiro) || 0
@@ -156,6 +168,51 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
 
     const fmt = (val) => (val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
     const fmtK = (val) => val >= 1000 ? `${(val / 1000).toFixed(1)}k` : Math.round(val)
+
+    // Goal breakdown by income stream
+    const avgPlanComm = stats.monthSubscriberCount > 0
+        ? stats.monthPlanCommission / stats.monthSubscriberCount : 11.25
+    const avgAvulsoComm = stats.monthAvulsoCount > 0
+        ? stats.monthAvulsoCommission / stats.monthAvulsoCount : 15
+    const avgCrossSellComm = 10 // estimated extra per cross-sell
+
+    const streams = [
+        {
+            key: 'avulso', label: 'Clientes Avulso', icon: <Scissors size={16} className="text-cyan-400" />,
+            color: 'cyan', pct: 0.45,
+            current: stats.monthAvulsoCount, currentComm: stats.monthAvulsoCommission,
+            avgComm: avgAvulsoComm,
+        },
+        {
+            key: 'plano', label: 'Assinantes', icon: <Users size={16} className="text-purple-400" />,
+            color: 'purple', pct: 0.30,
+            current: stats.monthSubscriberCount, currentComm: stats.monthPlanCommission,
+            avgComm: avgPlanComm,
+        },
+        {
+            key: 'crosssell', label: 'Venda Casada', icon: <Sparkles size={16} className="text-pink-400" />,
+            color: 'pink', pct: 0.15,
+            current: stats.monthCrossSellCount, currentComm: stats.monthCrossSellCount * avgCrossSellComm,
+            avgComm: avgCrossSellComm,
+        },
+        {
+            key: 'produto', label: 'Produtos', icon: <ShoppingBag size={16} className="text-amber-400" />,
+            color: 'amber', pct: 0.10,
+            current: stats.monthProductCount, currentComm: stats.monthProductCount * 5,
+            avgComm: 5,
+        },
+    ].map(s => {
+        const targetComm = MONTHLY_TARGET * s.pct
+        const targetCount = Math.ceil(targetComm / s.avgComm)
+        const progress = targetCount > 0 ? Math.min(100, (s.current / targetCount) * 100) : 100
+        return { ...s, targetComm, targetCount, progress }
+    })
+
+    // Avg services needed per day
+    const avgCommAll = currentMonthProduction > 0 && stats.todayCount > 0
+        ? currentMonthProduction / (stats.monthAvulsoCount + stats.monthSubscriberCount + stats.monthProductCount || 1)
+        : 15
+    const servicesNeededToday = dailyGoal > 0 ? Math.ceil(dailyGoal / avgCommAll) : 0
 
     // ==========================================
     // RENDER
@@ -202,16 +259,33 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
                 </div>
             )}
 
-            {/* ========== META MENSAL ========== */}
+            {/* ========== MINHA META ========== */}
             <div className="bg-gradient-to-r from-cyan-900/30 via-gray-900 to-gray-950 rounded-2xl p-4 border border-cyan-500/20">
                 <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                         <div className="w-9 h-9 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                            <TrendingUp size={18} className="text-cyan-400" />
+                            <Target size={18} className="text-cyan-400" />
                         </div>
                         <div>
-                            <h2 className="text-white font-bold text-base">Meta Mensal</h2>
-                            <p className="text-cyan-400 text-[10px] font-medium">Baseada na sua media + 10%</p>
+                            {editingGoal ? (
+                                <div className="flex items-center gap-2">
+                                    <span className="text-white text-sm">R$</span>
+                                    <input type="number" autoFocus placeholder={String(MONTHLY_TARGET)}
+                                        className="bg-gray-950 border border-cyan-600 rounded-lg px-2 py-1 text-white text-lg font-bold w-24 outline-none"
+                                        value={goalInput} onChange={e => setGoalInput(e.target.value)}
+                                        onKeyDown={e => e.key === 'Enter' && handleSaveGoal()}
+                                    />
+                                    <button onClick={handleSaveGoal} className="text-green-400 hover:text-green-300 p-1"><CheckCircle size={18} /></button>
+                                    <button onClick={() => { setEditingGoal(false); setGoalInput('') }} className="text-gray-500 hover:text-gray-300 p-1"><X size={16} /></button>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-2">
+                                    <h2 className="text-white font-bold text-base">Minha Meta: {fmt(MONTHLY_TARGET)}</h2>
+                                    <button onClick={() => { setEditingGoal(true); setGoalInput(String(MONTHLY_TARGET)) }}
+                                        className="text-gray-600 hover:text-cyan-400 p-0.5"><Pencil size={12} /></button>
+                                </div>
+                            )}
+                            {!editingGoal && <p className="text-cyan-400 text-[10px] font-medium">Plano mensal de comissao</p>}
                         </div>
                     </div>
                     <div className="text-right">
@@ -233,27 +307,64 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
                             style={{ width: `${Math.min(100, (currentMonthProduction / MONTHLY_TARGET) * 100)}%` }}
                         />
                     </div>
-                    <div className="flex justify-between mt-1.5 text-[10px]">
-                        <span className="text-gray-600">R$ 0</span>
-                        <span className={`font-bold ${currentMonthProduction >= MONTHLY_TARGET ? 'text-green-400' : 'text-cyan-500'}`}>
-                            🎯 R$ {fmtK(MONTHLY_TARGET)}
-                        </span>
-                    </div>
                 </div>
 
                 {/* Month Stats */}
                 <div className="grid grid-cols-2 gap-3 mt-3">
                     <div className="bg-gray-950/50 rounded-xl p-3 border border-gray-800">
-                        <p className="text-[10px] text-gray-500 mb-0.5">Voce ja fez</p>
+                        <p className="text-[10px] text-gray-500 mb-0.5">Ja fez</p>
                         <p className="text-lg font-bold text-cyan-400">{fmt(currentMonthProduction)}</p>
                     </div>
                     <div className="bg-gray-950/50 rounded-xl p-3 border border-gray-800">
-                        <p className="text-[10px] text-gray-500 mb-0.5">Falta para meta</p>
+                        <p className="text-[10px] text-gray-500 mb-0.5">Falta</p>
                         <p className={`text-lg font-bold ${remainingBalance <= 0 ? 'text-green-400' : 'text-orange-400'}`}>
-                            {remainingBalance <= 0 ? '🏆 BATIDA!' : fmt(remainingBalance)}
+                            {remainingBalance <= 0 ? 'META BATIDA!' : fmt(remainingBalance)}
                         </p>
                     </div>
                 </div>
+            </div>
+
+            {/* ========== PLANO DE ACAO ========== */}
+            <div className="space-y-2">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold px-1">
+                    Como chegar em {fmt(MONTHLY_TARGET)}
+                </p>
+                {streams.map(s => {
+                    const colorMap = {
+                        cyan:   { bg: 'bg-cyan-900/15',   border: 'border-cyan-900/30',   bar: 'bg-cyan-500',   text: 'text-cyan-400' },
+                        purple: { bg: 'bg-purple-900/15', border: 'border-purple-900/30', bar: 'bg-purple-500', text: 'text-purple-400' },
+                        pink:   { bg: 'bg-pink-900/15',   border: 'border-pink-900/30',   bar: 'bg-pink-500',   text: 'text-pink-400' },
+                        amber:  { bg: 'bg-amber-900/15',  border: 'border-amber-900/30',  bar: 'bg-amber-500',  text: 'text-amber-400' },
+                    }
+                    const c = colorMap[s.color]
+                    const done = s.current >= s.targetCount
+                    return (
+                        <div key={s.key} className={`${c.bg} border ${c.border} rounded-xl p-3`}>
+                            <div className="flex items-center justify-between mb-1.5">
+                                <div className="flex items-center gap-2">
+                                    {s.icon}
+                                    <span className="text-sm font-medium text-gray-200">{s.label}</span>
+                                </div>
+                                <div className="text-right">
+                                    <span className={`text-sm font-bold ${c.text}`}>{s.current}</span>
+                                    <span className="text-gray-600 text-xs">/{s.targetCount}</span>
+                                </div>
+                            </div>
+                            <div className="h-2 bg-gray-950 rounded-full overflow-hidden mb-1.5">
+                                <div className={`h-full ${c.bar} rounded-full transition-all duration-700 ${done ? 'shadow-[0_0_8px_rgba(34,197,94,0.4)]' : ''}`}
+                                    style={{ width: `${s.progress}%` }} />
+                            </div>
+                            <div className="flex justify-between text-[10px]">
+                                <span className="text-gray-500">
+                                    {fmt(s.currentComm)} de {fmt(s.targetComm)}
+                                </span>
+                                <span className={done ? 'text-green-400 font-bold' : 'text-gray-600'}>
+                                    {done ? 'Meta batida!' : `falta ${s.targetCount - s.current}`}
+                                </span>
+                            </div>
+                        </div>
+                    )
+                })}
             </div>
 
             {/* ========== META DIARIA ========== */}
@@ -262,98 +373,68 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
                 : isOffDay ? 'bg-gray-900/50 border-gray-800' : 'bg-gray-900 border-gray-800'
                 }`}>
                 {isGoalMet && <div className="absolute inset-0 bg-green-500/10 blur-3xl animate-pulse" />}
-
                 <div className="relative z-10">
                     <div className="flex items-center justify-between mb-2">
                         <div>
                             <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
-                                {isOffDay ? '😴 Dia de Folga' : `📅 ${todayStr}`}
+                                {isOffDay ? 'Dia de Folga' : todayStr}
                             </p>
                             <h3 className="text-white font-bold text-sm">
-                                {isGoalMet ? '🔥 Meta Batida!' : 'Meta de Hoje'}
+                                {isGoalMet ? 'Meta Batida!' : 'Meta de Hoje'}
                             </h3>
                         </div>
                         {!isOffDay && (
                             <div className="bg-gray-950/70 rounded-lg px-2.5 py-1.5 border border-gray-700 text-center">
-                                <span className="text-[10px] text-gray-400 block">~cortes</span>
-                                <span className="font-bold text-white text-lg">{servicesNeeded}</span>
+                                <span className="text-[10px] text-gray-400 block">~servicos</span>
+                                <span className="font-bold text-white text-lg">{servicesNeededToday}</span>
                             </div>
                         )}
                     </div>
-
                     {!isOffDay ? (
                         <>
                             <div className="flex items-end gap-2 mb-3">
-                                <span className={`text-3xl font-black ${isGoalMet ? 'text-green-400' : 'text-white'}`}>
+                                <span className={`text-2xl font-black ${isGoalMet ? 'text-green-400' : 'text-white'}`}>
                                     {fmt(dailyGoal)}
                                 </span>
                                 <span className="text-xs text-gray-500 pb-1">por dia</span>
                             </div>
-
                             <div className="relative mb-2">
                                 <div className="h-4 bg-gray-950 rounded-full overflow-hidden border border-gray-700">
-                                    <div
-                                        className={`h-full transition-all duration-700 ${isGoalMet
-                                            ? 'bg-gradient-to-r from-green-600 to-green-400'
-                                            : 'bg-gradient-to-r from-purple-600 to-pink-500'
-                                            }`}
-                                        style={{ width: `${goalProgress}%` }}
-                                    />
+                                    <div className={`h-full transition-all duration-700 ${isGoalMet
+                                        ? 'bg-gradient-to-r from-green-600 to-green-400'
+                                        : 'bg-gradient-to-r from-purple-600 to-pink-500'
+                                        }`} style={{ width: `${goalProgress}%` }} />
                                     <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-lg">
                                         {Math.floor(goalProgress)}%
                                     </div>
                                 </div>
                             </div>
-
                             <div className="flex justify-between text-[10px] font-medium">
                                 <span className="text-purple-400">Feito: {fmt(todayProduction)}</span>
                                 <span className={isGoalMet ? 'text-green-400' : 'text-gray-500'}>
-                                    {isGoalMet
-                                        ? `+${fmt(todayProduction - dailyGoal)} extra!`
-                                        : `Falta: ${fmt(Math.max(0, dailyGoal - todayProduction))}`}
+                                    {isGoalMet ? `+${fmt(todayProduction - dailyGoal)} extra!` : `Falta: ${fmt(Math.max(0, dailyGoal - todayProduction))}`}
                                 </span>
                             </div>
-
                             <p className={`text-[10px] mt-2 py-1.5 px-2 rounded-lg text-center ${isGoalMet
                                 ? 'bg-green-900/30 text-green-300 border border-green-800'
                                 : 'bg-gray-800/50 text-gray-400 border border-gray-700'
                                 }`}>
-                                {isGoalMet
-                                    ? "🚀 Excelente! Cada corte agora é lucro extra!"
-                                    : `Restam ${remainingWorkDays} dias úteis. Bora!`}
+                                {(() => {
+                                    const pct = (currentMonthProduction / MONTHLY_TARGET) * 100
+                                    if (isGoalMet) return "Excelente! Cada servico agora e lucro extra!"
+                                    if (pct >= 75) return "Quase la! Falta pouco!"
+                                    if (pct >= 50) return `Mais da metade! Restam ${remainingWorkDays} dias uteis.`
+                                    if (pct >= 25) return `Bom ritmo! ${remainingWorkDays} dias uteis restantes.`
+                                    return `O mes comecou. ${remainingWorkDays} dias uteis. Bora!`
+                                })()}
                             </p>
                         </>
                     ) : (
                         <div className="text-center py-3">
-                            <p className="text-gray-500 text-sm">Descanse bem! Amanhã é dia de batalha 💪</p>
+                            <p className="text-gray-500 text-sm">Descanse bem! Amanha e dia de batalha</p>
                         </div>
                     )}
                 </div>
-            </div>
-
-            {/* ========== INCENTIVE CARDS ========== */}
-            <div className="grid grid-cols-3 gap-2">
-                <IncentiveCard
-                    icon={<Sparkles size={14} className="text-pink-400" />}
-                    label="Sobrancelha"
-                    count={stats.monthSobrancelhaCount}
-                    goal={10}
-                    color="pink"
-                />
-                <IncentiveCard
-                    icon={<ShoppingBag size={14} className="text-amber-400" />}
-                    label="Produtos"
-                    count={stats.monthProductCount}
-                    goal={8}
-                    color="amber"
-                />
-                <IncentiveCard
-                    icon={<Users size={14} className="text-purple-400" />}
-                    label="Assinantes"
-                    count={stats.monthSubscriberCount}
-                    goal={15}
-                    color="purple"
-                />
             </div>
 
             {/* ========== COMMISSION CARDS ========== */}
@@ -482,30 +563,3 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
     )
 }
 
-// ==========================================
-// INCENTIVE CARD COMPONENT
-// ==========================================
-
-function IncentiveCard({ icon, label, count, goal, color }) {
-    const progress = Math.min(100, (count / goal) * 100)
-    const colorMap = {
-        pink: { bg: 'bg-pink-900/20', border: 'border-pink-900/30', text: 'text-pink-400', bar: 'bg-pink-500' },
-        amber: { bg: 'bg-amber-900/20', border: 'border-amber-900/30', text: 'text-amber-400', bar: 'bg-amber-500' },
-        purple: { bg: 'bg-purple-900/20', border: 'border-purple-900/30', text: 'text-purple-400', bar: 'bg-purple-500' },
-    }
-    const c = colorMap[color] || colorMap.pink
-
-    return (
-        <div className={`${c.bg} border ${c.border} rounded-xl p-2.5 text-center`}>
-            <div className="flex items-center justify-center gap-1 mb-1">
-                {icon}
-                <span className="text-[10px] text-gray-400 font-medium">{label}</span>
-            </div>
-            <p className={`text-lg font-black ${c.text}`}>{count}</p>
-            <div className="h-1 bg-gray-800 rounded-full mt-1 overflow-hidden">
-                <div className={`h-full ${c.bar} rounded-full transition-all duration-500`} style={{ width: `${progress}%` }} />
-            </div>
-            <p className="text-[8px] text-gray-600 mt-0.5">meta: {goal}/mes</p>
-        </div>
-    )
-}

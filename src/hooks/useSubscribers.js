@@ -3,11 +3,17 @@ import { useState, useEffect } from 'react'
 const SHEET_ID = '1EEYaNhk_ziJKq1OAdCw8-t95gt93o8TB4aJVC5m3rfQ'
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`
 
-// Status que indica assinante ativo (Google Sheet webhook + Celcoin CSV)
+// Status que indica assinante ativo
 const ACTIVE_STATUSES = [
     'capturada na operadora',
-    'paga fora do sistema',
-    'ativa'
+    'paga fora do sistema'
+]
+
+const INACTIVE_STATUSES = [
+    'cancelada ao cancelar a cobrança',
+    'negada na operadora',
+    'estornada',
+    'expirada'
 ]
 
 function parseCSV(text) {
@@ -88,6 +94,7 @@ export function useSubscribers() {
                 const phoneIdx = header.findIndex(h => h.includes('telefone'))
                 const contractIdx = header.findIndex(h => h.includes('inicio') || h.includes('contrato'))
                 const valorIdx = header.findIndex(h => h.includes('valor'))
+                const codeIdx = header.findIndex(h => h.includes('c_digo') || h.includes('codigo') || h === 'c_digo')
 
                 if (nameIdx === -1 || statusIdx === -1) {
                     throw new Error('Colunas "Nome" ou "Status" não encontradas')
@@ -99,15 +106,24 @@ export function useSubscribers() {
                 for (let i = 1; i < rows.length; i++) {
                     const row = rows[i]
                     const name = (row[nameIdx] || '').trim()
-                    const status = (row[statusIdx] || '').trim().toLowerCase()
-
                     if (!name) continue
 
                     // Clean malformed data
                     const cleanName = name.replace(/[}"]/g, '').trim()
                     if (!cleanName) continue
 
-                    const isActive = ACTIVE_STATUSES.some(s => status.includes(s))
+                    // Status rules from USER:
+                    // Column E (Status) and Column J (Ultima Atualização) usually contain these strings
+                    const colE = (row[statusIdx] || '').trim().toLowerCase()
+                    const colJ = (row[9] || '').trim().toLowerCase() // Column J as requested
+
+                    const isActive = 
+                        ACTIVE_STATUSES.some(s => colE.includes(s)) || 
+                        ACTIVE_STATUSES.some(s => colJ.includes(s))
+
+                    const isInactive = 
+                        INACTIVE_STATUSES.some(s => colE.includes(s)) ||
+                        INACTIVE_STATUSES.some(s => colJ.includes(s))
 
                     // Parse billing cycle day from contract start date
                     const contractRaw = contractIdx >= 0 ? (row[contractIdx] || '').replace(/[}"]/g, '').trim() : ''
@@ -127,13 +143,19 @@ export function useSubscribers() {
                     const valorRaw = valorIdx >= 0 ? (row[valorIdx] || '').replace(/[}"]/g, '').trim() : ''
                     const planValue = parseInt(valorRaw) || null
 
-                    // Always update - last row is most recent
-                    const existing = subscriberMap.get(cleanName.toLowerCase())
-                    subscriberMap.set(cleanName.toLowerCase(), {
+                    // Extract subscriber code
+                    const codeRaw = codeIdx >= 0 ? (row[codeIdx] || '').replace(/[}"]/g, '').trim() : ''
+                    const code = codeRaw || null
+
+                    // Always update - last row is most recent (use code as key if available)
+                    const mapKey = code || cleanName.toLowerCase()
+                    const existing = subscriberMap.get(mapKey)
+                    subscriberMap.set(mapKey, {
                         name: cleanName,
+                        code: code,
                         plano: (row[planoIdx] || '').replace(/[}"]/g, '').trim(),
                         phone: (row[phoneIdx] || '').replace(/[}"]/g, '').trim(),
-                        status: isActive ? 'ativo' : 'inativo',
+                        status: isActive ? 'ativo' : (isInactive ? 'inativo' : 'inativo'),
                         rawStatus: (row[statusIdx] || '').trim(),
                         billingDay: billingDay || (existing?.billingDay) || null,
                         planValue: planValue || (existing?.planValue) || null,
@@ -141,13 +163,12 @@ export function useSubscribers() {
                     })
                 }
 
-                // Only return active ones, sorted by name
-                const active = Array.from(subscriberMap.values())
-                    .filter(s => s.status === 'ativo')
+                // Process all subscribers
+                const all = Array.from(subscriberMap.values())
                     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
 
                 if (!cancelled) {
-                    setSubscribers(active)
+                    setSubscribers(all)
                     setError(null)
                 }
             } catch (e) {

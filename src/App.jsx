@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { auth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from './firebase'
-import { LogOut, Scissors, BarChart3, Wallet, Download, CreditCard } from 'lucide-react'
+import { LogOut, Scissors, BarChart3, Wallet, Download, CreditCard, TrendingUp, ShieldCheck } from 'lucide-react'
 
 import { ServiceForm } from './components/ServiceForm'
 import { ReportsDashboard } from './components/ReportsDashboard'
@@ -9,6 +9,8 @@ import { DailyClosure } from './components/DailyClosure'
 import { FinancialDashboard } from './components/FinancialDashboard'
 import { SubscriptionMonitor } from './components/SubscriptionMonitor'
 import { DebugData } from './components/DebugData'
+import { MetricsDashboard } from './components/MetricsDashboard'
+import { ClubLookup } from './components/ClubLookup'
 
 import { BARBERS } from './data/barbers'
 
@@ -75,12 +77,14 @@ function App() {
         </div>
         <nav className="flex gap-2 sm:gap-4">
           <Link to="/" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><Scissors size={18} /> <span className="hidden md:inline">Lançar</span></Link>
+          <Link to="/consulta-club" className="flex items-center gap-2 text-sm font-medium hover:text-emerald-400 font-bold bg-emerald-950/20 px-2 py-1 rounded border border-emerald-500/10"><ShieldCheck size={18} className="text-emerald-400" /> <span className="hidden md:inline">Consulta Club</span></Link>
 
           {isAdmin && (
             <>
               <Link to="/reports" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><BarChart3 size={18} /> <span className="hidden md:inline">Relatórios</span></Link>
               <Link to="/financeiro" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><Wallet size={18} /> <span className="hidden md:inline">Financeiro</span></Link>
               <Link to="/assinaturas" className="flex items-center gap-2 text-sm font-medium hover:text-purple-400"><CreditCard size={18} /> <span className="hidden md:inline">Assinaturas</span></Link>
+              <Link to="/metricas" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><TrendingUp size={18} /> <span className="hidden md:inline">Métricas</span></Link>
               <Link to="/fechamento" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><LogOut size={18} /> <span className="hidden md:inline">Fechamento</span></Link>
               <Link to="/debug" className="flex items-center gap-2 text-sm font-medium text-red-500 hover:text-red-400 border border-red-900/50 px-2 rounded"><span className="hidden md:inline">Reparo (Debug)</span></Link>
             </>
@@ -98,12 +102,14 @@ function App() {
       <main className="flex-1 p-2 sm:p-4 max-w-5xl mx-auto w-full">
         <Routes>
           <Route path="/" element={<ServiceForm />} />
+          <Route path="/consulta-club" element={<ClubLookup />} />
           {isAdmin ? (
             <>
               <Route path="/reports" element={<ReportsDashboard />} />
               <Route path="/fechamento" element={<DailyClosure />} />
               <Route path="/financeiro" element={<FinancialDashboard />} />
               <Route path="/assinaturas" element={<SubscriptionMonitor />} />
+              <Route path="/metricas" element={<MetricsDashboard />} />
               <Route path="/debug" element={<DebugData />} />
             </>
           ) : (

@@ -20,6 +20,7 @@ const SERVICE_PRESETS = [
     { label: 'M plano', desc: 'Corte maq plano', value: 20 },
     { label: 'M+T plano', desc: 'Corte maq+tes plano', value: 25 },
     { label: 'C+B plano', desc: 'Corte+barba plano', value: 35 },
+    { label: 'B plano', desc: 'Barba plano', value: 20 },
 ]
 
 export function ServiceForm() {
@@ -39,7 +40,8 @@ export function ServiceForm() {
         forma_pagamento: 'Dinheiro',
         tipo: 'servico',
         data_manual: '',
-        cliente_nome: ''
+        cliente_nome: '',
+        subscriber_code: ''
     })
     const [loading, setLoading] = useState(false)
     const [selectedPresets, setSelectedPresets] = useState([])
@@ -165,6 +167,7 @@ export function ServiceForm() {
                 barbeiro_nome: activeBarber.name,
                 loja_id: activeBarber.store,
                 cliente_nome: formData.cliente_nome || 'Não Informado',
+                subscriber_code: formData.subscriber_code || null,
                 created_at: serverTimestamp()
             }
 
@@ -217,7 +220,7 @@ export function ServiceForm() {
 
                 alert(`Lançamento salvo para ${activeBarber.name}!`)
             }
-            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '' })
+            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', subscriber_code: '' })
             setSelectedPresets([])
             setShowCustomDesc(false)
         } catch (e) {
@@ -431,7 +434,7 @@ export function ServiceForm() {
                                                     <UserCheck size={16} className="text-purple-400" />
                                                     <span className="text-purple-300 text-sm font-medium flex-1">{formData.cliente_nome}</span>
                                                     <button type="button"
-                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '' }); setSubscriberSearch('') }}
+                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '', subscriber_code: '' }); setSubscriberSearch('') }}
                                                         className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
                                                     >trocar</button>
                                                 </div>
@@ -457,13 +460,13 @@ export function ServiceForm() {
                                                                 filtered.slice(0, 20).map((sub, i) => (
                                                                     <button type="button" key={i}
                                                                         onClick={() => {
-                                                                            setFormData({ ...formData, cliente_nome: sub.name })
+                                                                            setFormData({ ...formData, cliente_nome: sub.name, subscriber_code: sub.code || '' })
                                                                             setSubscriberSearch('')
                                                                             setShowSubscriberDropdown(false)
                                                                         }}
                                                                         className="w-full text-left px-3 py-2 hover:bg-purple-900/20 transition-colors flex items-center justify-between gap-2 border-b border-gray-800/50 last:border-0"
                                                                     >
-                                                                        <span className="text-sm text-gray-200 truncate">{sub.name}</span>
+                                                                        <span className="text-sm text-gray-200 truncate">{sub.name} {sub.code && <span className="text-gray-600">#{sub.code}</span>}</span>
                                                                         {sub.plano && <span className="text-[10px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded shrink-0">{sub.plano}</span>}
                                                                     </button>
                                                                 ))

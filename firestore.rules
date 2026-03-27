@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Coleções já existentes
+    match /lancamentos/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /despesas/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /comissoes/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /configuracoes/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // NOVA coleção — Financeiro Operacional (v2)
+    match /financeiro/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // NOVA coleção — Movimentações de Capital
+    match /movimentacoes/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
