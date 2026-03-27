@@ -7,7 +7,7 @@ const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=
 
 // ── Booksy sheet (agendamentos diretos) ──
 const BOOKSY_SHEET_ID = '1N8JpnSRFFYed7A6RMsJ79aoTeJ26PbI6yQBe5geYCNM'
-const BOOKSY_QUERY = `SELECT C, G, H, Q WHERE Q = 'Concluída'`
+const BOOKSY_QUERY = `SELECT * WHERE Q = 'Concluída'`
 const BOOKSY_CSV_URL = `https://docs.google.com/spreadsheets/d/${BOOKSY_SHEET_ID}/gviz/tq?tqx=out:csv&tq=${encodeURIComponent(BOOKSY_QUERY)}`
 
 // ── Subscribers sheet (Club) ──
@@ -69,6 +69,33 @@ function parseCSV(text) {
     }
 
     return rows
+}
+
+// ── Normalize phone for consistent matching ──
+function normalizePhone(raw) {
+    if (!raw) return ''
+    let clean = raw.replace(/\D/g, '')
+
+    // For Brazilian numbers match:
+    // Some have country code 55, others don't.
+    // Some have the 9th digit, others don't.
+    
+    // 1) Ensure we have the base number (remove 55 if it's there)
+    if (clean.startsWith('55') && (clean.length === 12 || clean.length === 13)) {
+        clean = clean.substring(2)
+    }
+
+    // 2) If 10 digits, add the missing 9 for mobile (usually Rio 21)
+    if (clean.length === 10) {
+        clean = clean.substring(0, 2) + '9' + clean.substring(2)
+    }
+
+    // 3) Standardize back to full format with 55 for worldwide consistency
+    if (clean.length === 11) {
+        return '55' + clean
+    }
+
+    return clean.length >= 10 ? '55' + clean : clean
 }
 
 // ── Normalize name for matching between sources ──
@@ -211,7 +238,7 @@ function buildPredictions(whatsappRows, booksyRows, subscribersRows) {
             for (let i = 1; i < subscribersRows.length; i++) {
                 const row = subscribersRows[i]
                 const status = (row[statusIdx] || '').trim().toLowerCase()
-                const phone = (row[phoneIdx] || '').replace(/[}"]/g, '').replace(/\D/g, '').trim()
+                const phone = normalizePhone((row[phoneIdx] || ''))
                 const isActive = ACTIVE_STATUSES.some(s => status.includes(s))
 
                 if (isActive && phone) {
@@ -249,8 +276,8 @@ function buildPredictions(whatsappRows, booksyRows, subscribersRows) {
             if (phone.startsWith('~~')) continue
             if (!agendamento.toLowerCase().includes('confirmado')) continue
 
-            const cleanPhone = phone.replace(/\D/g, '')
-            if (cleanPhone.length < 10) continue
+            const cleanPhone = normalizePhone(phone)
+            if (!cleanPhone || cleanPhone.length < 10) continue
 
             const interactionDate = parseInteractionDate(colC)
             const visitDate = extractVisitDate(agendamento, interactionDate)
@@ -263,7 +290,7 @@ function buildPredictions(whatsappRows, booksyRows, subscribersRows) {
             const clientName = extractClientName(agendamento) || colA || 'Sem nome'
             const barber = extractBarber(agendamento)
             const store = extractStore(agendamento)
-            const key = cleanPhone // WhatsApp clients keyed by phone
+            const key = cleanPhone // WhatsApp clients keyed by normalized phone
 
             if (!clientMap.has(key)) {
                 clientMap.set(key, {
@@ -301,13 +328,18 @@ function buildPredictions(whatsappRows, booksyRows, subscribersRows) {
     // 2) Process Booksy appointments
     // ═══════════════════════════════════════════
     if (booksyRows && booksyRows.length >= 2) {
+        const header = booksyRows[0].map(h => (h || '').toLowerCase().replace(/[^a-z0-9]/g, '_'))
+        const dateIdx = header.findIndex(h => h.includes('data') || h.includes('hora'))
+        const nameIdx = header.findIndex(h => h.includes('cliente'))
+        const barberIdx = header.findIndex(h => h.includes('funcion_rio') || h.includes('barbeiro'))
+        const phoneIdx = header.findIndex(h => h.includes('telefone') || h.includes('celular') || h.includes('contato'))
+
         for (let i = 1; i < booksyRows.length; i++) {
             const row = booksyRows[i]
-            // Columns: C=Data e hora, G=Cliente, H=Funcionário, Q=Status
-            const dateRaw = (row[0] || '').trim()
-            const clientName = (row[1] || '').trim()
-            const barber = (row[2] || '').trim()
-            // Status already filtered by query (Concluída only)
+            const dateRaw = (row[dateIdx] || '').trim()
+            const clientName = (row[nameIdx] || '').trim()
+            const barber = (row[barberIdx] || '').trim()
+            const phone = phoneIdx !== -1 ? (row[phoneIdx] || '').trim() : ''
 
             if (!clientName || !dateRaw) continue
 
@@ -322,31 +354,45 @@ function buildPredictions(whatsappRows, booksyRows, subscribersRows) {
 
             booksyCount++
 
-            // Try to merge with existing WhatsApp client by name
-            let key = nameToKey.get(normName)
+            // Try to match by phone first if available
+            const cleanPhone = normalizePhone(phone)
+            let key = (cleanPhone && cleanPhone.length >= 10) ? cleanPhone : nameToKey.get(normName)
+
             if (!key) {
                 // New Booksy-only client, keyed by name
                 key = `booksy_${normName}`
                 if (!clientMap.has(key)) {
                     clientMap.set(key, {
                         name: clientName,
-                        phone: '',
+                        phone: cleanPhone || '',
                         visitDays: new Map(),
                         barbers: new Set(),
                         stores: new Set(),
                         source: 'booksy',
-                        isSubscriber: false // Booksy-only clients usually lack phone in this export
+                        isSubscriber: cleanPhone ? subscriberPhones.has(cleanPhone) : false
                     })
                     nameToKey.set(normName, key)
                 }
+            } else if (cleanPhone && !clientMap.has(key)) {
+                // We have a phone match from subscriber/wa but haven't seen this key in this run yet?
+                // Actually if key exists in nameToKey it would be found.
+                // If it's a new phone not seen in WA, create it
+                clientMap.set(key, {
+                    name: clientName,
+                    phone: cleanPhone,
+                    visitDays: new Map(),
+                    barbers: new Set(),
+                    stores: new Set(),
+                    source: 'booksy',
+                    isSubscriber: subscriberPhones.has(cleanPhone)
+                })
             }
 
             const client = clientMap.get(key)
+            if (cleanPhone && !client.phone) client.phone = cleanPhone
+            if (cleanPhone) client.isSubscriber = subscriberPhones.has(cleanPhone)
+
             // Keep best (longest) name
-            if (clientName.length > client.name.length && !normName.startsWith('booksy_')) {
-                client.name = clientName
-            }
-            // If this was a Booksy-only and now has a better name
             if (clientName.length > client.name.length) {
                 client.name = clientName
             }
