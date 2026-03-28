@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
-import { db, collection, query, where, getDocs, deleteDoc, doc } from '../firebase'
+import { db, collection, query, where, getDocs, deleteDoc, doc, updateDoc } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
-import { Filter, Calendar, User, DollarSign, RefreshCw, Copy, Trash2, Download, TrendingUp, TrendingDown, Scissors, CreditCard, Banknote, Smartphone, Award, BarChart3, Clock, Star, Store, Users, ChevronDown, ChevronUp } from 'lucide-react'
+import { Filter, Calendar, User, DollarSign, RefreshCw, Copy, Trash2, Pencil, Download, TrendingUp, TrendingDown, Scissors, CreditCard, Banknote, Smartphone, Award, BarChart3, Clock, Star, Store, Users, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { BARBERS, STORES } from '../data/barbers'
 
 // =============================================
@@ -60,6 +60,7 @@ export function ReportsDashboard() {
     const [loading, setLoading] = useState(false)
     const [pageError, setPageError] = useState(null)
     const [deleteId, setDeleteId] = useState(null)
+    const [editItem, setEditItem] = useState(null)
     const [expandedDays, setExpandedDays] = useState({})
 
     // Managerial Data (Current Month)
@@ -327,6 +328,61 @@ export function ReportsDashboard() {
         } catch (e) {
             console.error("Error deleting:", e)
             alert("Erro ao excluir: " + e.message)
+        }
+    }
+
+    // =============================================
+    // EDIT LOGIC
+    // =============================================
+
+    const handleEdit = (item) => {
+        // Formatar data para o input datetime-local: YYYY-MM-DDTHH:mm
+        let dateVal = ''
+        if (item.data?.seconds) {
+            const date = new Date(item.data.seconds * 1000)
+            dateVal = new Date(date.getTime() - (date.getTimezoneOffset() * 60000)).toISOString().slice(0, 16)
+        }
+
+        setEditItem({
+            ...item,
+            data_formatada: dateVal,
+            valor_bruto: item.valor_bruto?.toString() || '0',
+            comissao_barbeiro: item.comissao_barbeiro?.toString() || '0'
+        })
+    }
+
+    const executeUpdate = async (e) => {
+        e.preventDefault()
+        if (!editItem) return
+        setLoading(true)
+        try {
+            const barber = BARBERS.find(b => b.id === editItem.barbeiro_id)
+            const updatedData = {
+                barbeiro_id: editItem.barbeiro_id,
+                barbeiro_nome: barber?.name || editItem.barbeiro_nome,
+                cliente_nome: editItem.cliente_nome,
+                servico_descricao: editItem.servico_descricao,
+                valor_bruto: parseFloat(editItem.valor_bruto) || 0,
+                comissao_barbeiro: parseFloat(editItem.comissao_barbeiro) || 0,
+                forma_pagamento: editItem.forma_pagamento,
+                loja_id: barber?.store || editItem.loja_id,
+                data: Timestamp.fromDate(new Date(editItem.data_formatada))
+            }
+
+            await updateDoc(doc(db, 'lancamentos', editItem.id), updatedData)
+            
+            // Update local state
+            const newData = data.map(d => d.id === editItem.id ? { ...d, ...updatedData } : d)
+            setData(newData)
+            setRawData(rawData.map(d => d.id === editItem.id ? { ...d, ...updatedData } : d))
+            
+            setEditItem(null)
+            alert("Lançamento atualizado com sucesso!")
+        } catch (e) {
+            console.error("Error updating:", e)
+            alert("Erro ao atualizar: " + e.message)
+        } finally {
+            setLoading(false)
         }
     }
 
@@ -723,7 +779,12 @@ export function ReportsDashboard() {
                                                         <td className="px-3 py-2.5 text-right">
                                                             <PaymentBadge method={item.forma_pagamento} />
                                                         </td>
-                                                        <td className="px-3 py-2.5 text-right">
+                                                        <td className="px-3 py-2.5 text-right flex items-center justify-end gap-1">
+                                                            <button onClick={() => handleEdit(item)}
+                                                                className="text-gray-500 hover:text-cyan-400 p-1 rounded hover:bg-cyan-900/10 transition-colors"
+                                                                title="Editar">
+                                                                <Pencil size={14} />
+                                                            </button>
                                                             <button onClick={() => confirmDelete(item.id)}
                                                                 className="text-gray-500 hover:text-red-400 p-1 rounded hover:bg-red-900/10 transition-colors"
                                                                 title="Excluir">
@@ -760,6 +821,102 @@ export function ReportsDashboard() {
                             <button onClick={() => setDeleteId(null)} className="px-4 py-2 rounded-lg text-gray-300 hover:bg-gray-800">Cancelar</button>
                             <button onClick={executeDelete} className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium">Sim, Excluir</button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* EDIT MODAL */}
+            {editItem && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 max-w-lg w-full shadow-2xl overflow-y-auto max-h-[90vh]">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-lg font-bold text-white">Editar Lançamento</h3>
+                            <button onClick={() => setEditItem(null)} className="text-gray-500 hover:text-gray-300">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        
+                        <form onSubmit={executeUpdate} className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="col-span-2">
+                                    <label className="block text-xs text-gray-400 mb-1">Data e Hora</label>
+                                    <input type="datetime-local" required
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-cyan-500 scheme-dark"
+                                        value={editItem.data_formatada}
+                                        onChange={e => setEditItem({ ...editItem, data_formatada: e.target.value })}
+                                    />
+                                </div>
+                                
+                                <div className="col-span-2">
+                                    <label className="block text-xs text-gray-400 mb-1">Barbeiro</label>
+                                    <select required
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-cyan-500"
+                                        value={editItem.barbeiro_id}
+                                        onChange={e => setEditItem({ ...editItem, barbeiro_id: e.target.value })}
+                                    >
+                                        {BARBERS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                    </select>
+                                </div>
+
+                                <div className="col-span-2">
+                                    <label className="block text-xs text-gray-400 mb-1">Cliente</label>
+                                    <input type="text"
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-cyan-500"
+                                        value={editItem.cliente_nome || ''}
+                                        onChange={e => setEditItem({ ...editItem, cliente_nome: e.target.value })}
+                                    />
+                                </div>
+
+                                <div className="col-span-2">
+                                    <label className="block text-xs text-gray-400 mb-1">Serviço/Descrição</label>
+                                    <input type="text" required
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-cyan-500"
+                                        value={editItem.servico_descricao}
+                                        onChange={e => setEditItem({ ...editItem, servico_descricao: e.target.value })}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Valor Bruto (R$)</label>
+                                    <input type="number" step="0.01" required
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-cyan-500"
+                                        value={editItem.valor_bruto}
+                                        onChange={e => setEditItem({ ...editItem, valor_bruto: e.target.value })}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Comissão (R$)</label>
+                                    <input type="number" step="0.01" required
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-cyan-500"
+                                        value={editItem.comissao_barbeiro}
+                                        onChange={e => setEditItem({ ...editItem, comissao_barbeiro: e.target.value })}
+                                    />
+                                </div>
+
+                                <div className="col-span-2">
+                                    <label className="block text-xs text-gray-400 mb-1">Forma de Pagamento</label>
+                                    <select required
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-cyan-500"
+                                        value={editItem.forma_pagamento}
+                                        onChange={e => setEditItem({ ...editItem, forma_pagamento: e.target.value })}
+                                    >
+                                        {Object.keys(PAYMENT_ICONS).map(pm => <option key={pm} value={pm}>{pm}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 justify-end pt-4">
+                                <button type="button" onClick={() => setEditItem(null)} 
+                                    className="px-4 py-2 rounded-lg text-gray-300 hover:bg-gray-800 transition-colors">
+                                    Cancelar
+                                </button>
+                                <button type="submit" disabled={loading}
+                                    className="px-6 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium shadow-lg shadow-cyan-900/20 active:scale-95 transition-all disabled:opacity-50">
+                                    {loading ? 'Salvando...' : 'Salvar Alterações'}
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}
