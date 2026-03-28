@@ -644,7 +644,8 @@ export function ReportsDashboard() {
                         <>
                             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                                 <MetricCard label="Faturamento Bruto" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
-                                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="green" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
+                                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="orange" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
+                                <MetricCard label="Resultado Líquido" value={fmt(analytics.gross - analytics.commission)} icon={Banknote} color="emerald" />
                                 <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
                             </div>
@@ -988,7 +989,8 @@ function BarberDetailView({ barber, analytics, data }) {
             {/* Personal Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                 <MetricCard label="Faturamento" value={fmt(barberData.gross)} icon={DollarSign} color="cyan" />
-                <MetricCard label="Comissão (Total)" value={fmt(barberData.commission)} icon={Award} color="green" sub={`Receita: ${fmt(barberData.commissionRevenue)} | Assin/Vale: ${fmt(barberData.commissionNonCash)}`} />
+                <MetricCard label="Comissão (Total)" value={fmt(barberData.commission)} icon={Award} color="orange" sub={`Receita: ${fmt(barberData.commissionRevenue)} | Assin/Vale: ${fmt(barberData.commissionNonCash)}`} />
+                <MetricCard label="Resultado Líquido" value={fmt(barberData.gross - barberData.commission)} icon={Banknote} color="emerald" />
                 <MetricCard label="Atendimentos" value={barberData.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(avg(barberData.gross, barberData.serviceCount))} icon={TrendingUp} color="yellow" />
             </div>
@@ -1088,9 +1090,10 @@ function StoreDetailView({ store, analytics, data }) {
             </div>
 
             {/* Store Metrics */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <MetricCard label="Faturamento" value={fmt(analytics.gross)} icon={DollarSign} color={color} />
-                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="green" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                <MetricCard label="Faturamento" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
+                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="orange" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
+                <MetricCard label="Resultado Líquido" value={fmt(analytics.gross - analytics.commission)} icon={Banknote} color="emerald" />
                 <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
             </div>
@@ -1191,8 +1194,10 @@ function MetricCard({ label, value, icon: Icon, color, sub }) {
     const colorMap = {
         cyan: 'text-cyan-500',
         green: 'text-green-500',
+        emerald: 'text-emerald-500',
         blue: 'text-blue-500',
         yellow: 'text-yellow-500',
+        orange: 'text-orange-500',
         purple: 'text-purple-500',
         red: 'text-red-500'
     }
