@@ -68,8 +68,8 @@ export function SubscriptionMonitor() {
         setLoading(true)
         try {
             const [y, m] = month.split('-').map(Number)
-            // Fetch from day 1 of selected month to end of next month to cover all individual cycles
-            const start = new Date(y, m - 1, 1)
+            // Fetch from previous month start to cover cycles that started in the previous month
+            const start = new Date(y, m - 2, 1)
             const end = new Date(y, m + 1, 0, 23, 59, 59)
 
             const q = query(
@@ -304,7 +304,7 @@ export function SubscriptionMonitor() {
             lossCount,
             noShowCount,
             avgVisits,
-            totalVisits: lancamentos.length,
+            totalVisits: clientAnalysis.reduce((s, c) => s + c.visitCount, 0),
             byPlan
         }
     }, [subscribers, lancamentos, subsLoading])
@@ -394,7 +394,7 @@ export function SubscriptionMonitor() {
                         </div>
                         <div className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-4 text-center">
                             <div className="text-3xl font-black text-gray-400">{analytics.noShowCount}</div>
-                            <div className="text-xs text-gray-500 mt-1">Sem uso no mês</div>
+                            <div className="text-xs text-gray-500 mt-1">Sem uso no ciclo</div>
                         </div>
                     </div>
 
