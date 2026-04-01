@@ -1,12 +1,13 @@
 import { useState, useRef, useMemo } from 'react'
 import { db, collection, addDoc, serverTimestamp, auth, signOut } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
-import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronRight, Search, UserCheck, AlertTriangle } from 'lucide-react'
+import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronRight, Search, UserCheck, AlertTriangle, Phone } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
 import { BarberDailyView } from './BarberDailyView'
 import { BarberRanking } from './BarberRanking'
 import { useBarberStats } from '../hooks/useBarberStats'
 import { useSubscribers } from '../hooks/useSubscribers'
+import { useVoucherClients } from '../hooks/useVoucherClients'
 
 // ==========================================
 // SERVICE PRESETS (quick-tap chips, multi-select)
@@ -41,17 +42,25 @@ export function ServiceForm() {
         tipo: 'servico',
         data_manual: '',
         cliente_nome: '',
+        cliente_telefone: '',
         subscriber_code: ''
     })
+    const [voucherBalance, setVoucherBalance] = useState(null)
+    const [fetchingBalance, setFetchingBalance] = useState(false)
     const [loading, setLoading] = useState(false)
     const [selectedPresets, setSelectedPresets] = useState([])
     const [showCustomDesc, setShowCustomDesc] = useState(false)
     const isSubmittingRef = useRef(false)
     const [subscriberSearch, setSubscriberSearch] = useState('')
     const [showSubscriberDropdown, setShowSubscriberDropdown] = useState(false)
+    const [voucherSearch, setVoucherSearch] = useState('')
+    const [showVoucherDropdown, setShowVoucherDropdown] = useState(false)
 
-    // Subscribers from Google Sheets
+    // Subscribers from Google Sheets (Club)
     const { subscribers, loading: subsLoading, error: subsError } = useSubscribers()
+
+    // Voucher Clients from Firestore
+    const { clients: voucherClients, loading: vouchersLoading } = useVoucherClients()
 
     // Derived active barber
     const activeBarber = BARBERS.find(b => b.id === selectedBarberId) || loggedInBarber
@@ -71,6 +80,34 @@ export function ServiceForm() {
         activeBarber?.id,
         formData.data_manual || today
     )
+
+    // Balance lookup for Voucher
+    useEffect(() => {
+        if (formData.forma_pagamento === 'Vale Presente' && formData.cliente_nome) {
+            const fetchBalance = async () => {
+                setFetchingBalance(true)
+                try {
+                    const q = query(
+                        collection(db, 'lancamentos'),
+                        where('cliente_nome', '==', formData.cliente_nome)
+                    )
+                    const snap = await getDocs(q)
+                    const items = snap.docs.map(d => d.data())
+                    const credits = items.filter(i => i.tipo === 'venda_vale').reduce((sum, i) => sum + 4, 0)
+                    const debits = items.filter(i => i.forma_pagamento === 'Vale Presente').length
+                    setVoucherBalance(credits - debits)
+                } catch (e) {
+                    console.error("Error fetching voucher balance:", e)
+                } finally {
+                    setFetchingBalance(false)
+                }
+            }
+            fetchBalance()
+        } else {
+            setVoucherBalance(null)
+        }
+    }, [formData.forma_pagamento, formData.cliente_nome])
+
 
     const handlePresetToggle = (preset) => {
         setShowCustomDesc(false)
@@ -129,10 +166,32 @@ export function ServiceForm() {
             return alert('Venda de Assinatura ou Vale Presente só pode ser feita com pagamento real (Dinheiro, Pix, Crédito ou Débito).')
         }
 
+        if (formData.tipo === 'venda_vale' && (!formData.cliente_nome || !formData.cliente_telefone)) {
+            return alert('Para venda de Vale Presente, Nome e Telefone do cliente são obrigatórios.')
+        }
+
+        if (formData.forma_pagamento === 'Vale Presente' && (!formData.cliente_nome)) {
+            return alert('Selecione um cliente cadastrado para utilizar o Vale Presente.')
+        }
+
+        if (formData.forma_pagamento === 'Vale Presente' && voucherBalance !== null && voucherBalance <= 0) {
+            return alert('Atenção: Este cliente não possui saldo de Vale Presente disponível.')
+        }
+
         isSubmittingRef.current = true
         setLoading(true)
         try {
             if (!activeBarber) throw new Error('Nenhum barbeiro selecionado.')
+
+            // Registrar cliente de vale se for venda de vale
+            if (formData.tipo === 'venda_vale') {
+                const clientRef = doc(db, 'clientes_vale', formData.cliente_nome.toLowerCase().trim())
+                await setDoc(clientRef, {
+                    nome: formData.cliente_nome.trim(),
+                    telefone: formData.cliente_telefone.trim(),
+                    updated_at: serverTimestamp()
+                }, { merge: true })
+            }
 
             const now = new Date()
             const todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
@@ -220,9 +279,10 @@ export function ServiceForm() {
 
                 alert(`Lançamento salvo para ${activeBarber.name}!`)
             }
-            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', subscriber_code: '' })
+            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', cliente_telefone: '', subscriber_code: '' })
             setSelectedPresets([])
             setShowCustomDesc(false)
+            setVoucherBalance(null)
         } catch (e) {
             console.error(e)
             alert('Erro ao salvar: ' + e.message)
@@ -409,6 +469,22 @@ export function ServiceForm() {
                                 </div>
                             </div>
 
+                            {/* Captura de Telefone (apenas para Venda de Vale) */}
+                            {formData.tipo === 'venda_vale' && (
+                                <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
+                                    <label className="block text-xs text-cyan-400 font-bold uppercase tracking-wider">Telefone do Cliente (Obrigatório)</label>
+                                    <div className="relative">
+                                        <Phone className="absolute left-3 top-2.5 text-cyan-600" size={16} />
+                                        <input
+                                            placeholder="(00) 00000-0000"
+                                            className="w-full bg-gray-950 border border-cyan-900/50 rounded-lg py-2.5 pl-10 pr-3 text-gray-200 outline-none focus:border-cyan-500"
+                                            value={formData.cliente_telefone}
+                                            onChange={e => setFormData({ ...formData, cliente_telefone: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Client Name */}
                             {(() => {
                                 const isAssinante = formData.forma_pagamento === 'Assinante'
@@ -468,6 +544,90 @@ export function ServiceForm() {
                                                                     >
                                                                         <span className="text-sm text-gray-200 truncate">{sub.name} {sub.code && <span className="text-gray-600">#{sub.code}</span>}</span>
                                                                         {sub.plano && <span className="text-[10px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded shrink-0">{sub.plano}</span>}
+                                                                    </button>
+                                                                ))
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                    )
+                                }
+
+                                if (formData.forma_pagamento === 'Vale Presente') {
+                                    const filtered = voucherClients.filter(c =>
+                                        c.nome.toLowerCase().includes(voucherSearch.toLowerCase())
+                                    )
+                                    return (
+                                        <div className="relative">
+                                            <label className="block text-xs text-gray-500 mb-1 flex items-center justify-between">
+                                                <div className="flex items-center gap-1">
+                                                    <CreditCard size={12} className="text-pink-400" />
+                                                    Cliente Vale <span className="text-red-400">*</span>
+                                                </div>
+                                                {voucherBalance !== null && (
+                                                    <span className={`font-bold ${voucherBalance > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {fetchingBalance ? '...' : `Saldo: ${voucherBalance} usos`}
+                                                    </span>
+                                                )}
+                                            </label>
+                                            {formData.cliente_nome ? (
+                                                <div className="flex items-center gap-2 bg-pink-900/20 border border-pink-700/50 rounded-lg py-2 px-3">
+                                                    <div className="flex-1">
+                                                        <div className="text-pink-300 text-sm font-bold">{formData.cliente_nome}</div>
+                                                        <div className="text-[10px] text-gray-500">{formData.cliente_telefone}</div>
+                                                    </div>
+                                                    <button type="button"
+                                                        onClick={() => {
+                                                            setFormData({ ...formData, cliente_nome: '', cliente_telefone: '' })
+                                                            setVoucherSearch('')
+                                                            setVoucherBalance(null)
+                                                        }}
+                                                        className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
+                                                    >trocar</button>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="relative">
+                                                        <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
+                                                        <input
+                                                            placeholder="Buscar cliente do vale..."
+                                                            className="w-full bg-gray-950 border border-pink-700/50 rounded-lg py-2 pl-8 pr-3 text-gray-200 outline-none focus:border-pink-500 text-sm"
+                                                            value={voucherSearch}
+                                                            onChange={e => { setVoucherSearch(e.target.value); setShowVoucherDropdown(true) }}
+                                                            onFocus={() => setShowVoucherDropdown(true)}
+                                                        />
+                                                    </div>
+                                                    {showVoucherDropdown && (
+                                                        <div className="absolute z-50 w-full mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-h-48 overflow-y-auto">
+                                                            {filtered.length === 0 ? (
+                                                                <div className="px-3 py-4 text-center">
+                                                                    <p className="text-gray-500 text-xs mb-2">Nenhum cliente de vale encontrado</p>
+                                                                    {voucherSearch && (
+                                                                        <button type="button"
+                                                                            onClick={() => {
+                                                                                setFormData({ ...formData, cliente_nome: voucherSearch })
+                                                                                setShowVoucherDropdown(false)
+                                                                            }}
+                                                                            className="text-[10px] bg-gray-800 text-gray-300 px-2 py-1 rounded hover:bg-gray-700"
+                                                                        >Usar "{voucherSearch}" (avulso)</button>
+                                                                    )}
+                                                                </div>
+                                                            ) : (
+                                                                filtered.map((cl, i) => (
+                                                                    <button type="button" key={i}
+                                                                        onClick={() => {
+                                                                            setFormData({ ...formData, cliente_nome: cl.nome, cliente_telefone: cl.telefone || '' })
+                                                                            setVoucherSearch('')
+                                                                            setShowVoucherDropdown(false)
+                                                                        }}
+                                                                        className="w-full text-left px-3 py-2 hover:bg-pink-900/20 transition-colors flex items-center justify-between gap-2 border-b border-gray-800/50 last:border-0"
+                                                                    >
+                                                                        <div>
+                                                                            <div className="text-sm text-gray-200 font-medium">{cl.nome}</div>
+                                                                            <div className="text-[10px] text-gray-500">{cl.telefone}</div>
+                                                                        </div>
                                                                     </button>
                                                                 ))
                                                             )}
