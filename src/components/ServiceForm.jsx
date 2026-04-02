@@ -1,7 +1,7 @@
-import { useState, useRef, useMemo } from 'react'
-import { db, collection, addDoc, serverTimestamp, auth, signOut } from '../firebase'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { db, collection, addDoc, serverTimestamp, auth, signOut, query, where, getDocs, doc, setDoc } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
-import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronRight, Search, UserCheck, AlertTriangle, Phone } from 'lucide-react'
+import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronRight, Search, UserCheck, AlertTriangle, Phone, CreditCard } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
 import { BarberDailyView } from './BarberDailyView'
 import { BarberRanking } from './BarberRanking'
@@ -46,6 +46,7 @@ export function ServiceForm() {
         subscriber_code: ''
     })
     const [voucherBalance, setVoucherBalance] = useState(null)
+    const [voucherValorPorUso, setVoucherValorPorUso] = useState(null)
     const [fetchingBalance, setFetchingBalance] = useState(false)
     const [loading, setLoading] = useState(false)
     const [selectedPresets, setSelectedPresets] = useState([])
@@ -81,12 +82,30 @@ export function ServiceForm() {
         formData.data_manual || today
     )
 
-    // Balance lookup for Voucher
+    // Balance lookup for Voucher + valor_por_uso
     useEffect(() => {
         if (formData.forma_pagamento === 'Vale Presente' && formData.cliente_nome) {
             const fetchBalance = async () => {
                 setFetchingBalance(true)
                 try {
+                    // Buscar dados do cliente no clientes_vale
+                    const clientKey = formData.cliente_nome.toLowerCase().trim()
+                    const clientDoc = await getDocs(query(collection(db, 'clientes_vale'), where('nome', '==', formData.cliente_nome)))
+                    let valorPorUso = null
+                    if (!clientDoc.empty) {
+                        const clientData = clientDoc.docs[0].data()
+                        valorPorUso = clientData.valor_por_uso || null
+                    }
+                    setVoucherValorPorUso(valorPorUso)
+
+                    // Autopreencher valor, descrição e travar formulário
+                    if (valorPorUso) {
+                        setFormData(prev => ({ ...prev, valor_bruto: valorPorUso.toString(), servico_descricao: 'Uso Vale Presente', tipo: 'servico' }))
+                        setSelectedPresets([])
+                        setShowCustomDesc(false)
+                    }
+
+                    // Calcular saldo
                     const q = query(
                         collection(db, 'lancamentos'),
                         where('cliente_nome', '==', formData.cliente_nome)
@@ -105,6 +124,7 @@ export function ServiceForm() {
             fetchBalance()
         } else {
             setVoucherBalance(null)
+            setVoucherValorPorUso(null)
         }
     }, [formData.forma_pagamento, formData.cliente_nome])
 
@@ -120,6 +140,9 @@ export function ServiceForm() {
         }
         setSelectedPresets(newPresets)
 
+        // Se pagamento é Vale Presente com valor fixo, não alterar o valor
+        const isValeFixo = formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso
+
         if (newPresets.length > 0) {
             const desc = newPresets.map(p => p.desc).join(' + ')
             const total = newPresets.reduce((sum, p) => sum + p.value, 0)
@@ -127,16 +150,17 @@ export function ServiceForm() {
             const avulsos = newPresets.filter(p => !p.label.includes('plano'))
             const onlyPlano = planos.length > 0 && avulsos.length === 0
             const noPlano = planos.length === 0
-            setFormData({ ...formData, servico_descricao: desc, valor_bruto: total.toString(), tipo: 'servico', forma_pagamento: onlyPlano ? 'Assinante' : ((formData.forma_pagamento === 'Assinante' && (noPlano || avulsos.length > 0)) ? 'Dinheiro' : formData.forma_pagamento) })
+            setFormData({ ...formData, servico_descricao: desc, valor_bruto: isValeFixo ? formData.valor_bruto : total.toString(), tipo: 'servico', forma_pagamento: onlyPlano ? 'Assinante' : ((formData.forma_pagamento === 'Assinante' && (noPlano || avulsos.length > 0)) ? 'Dinheiro' : formData.forma_pagamento) })
         } else {
-            setFormData({ ...formData, servico_descricao: '', valor_bruto: '' })
+            setFormData({ ...formData, servico_descricao: '', valor_bruto: isValeFixo ? formData.valor_bruto : '' })
         }
     }
 
     const handleCustomService = () => {
+        const isValeFixo = formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso
         setSelectedPresets([])
         setShowCustomDesc(true)
-        setFormData({ ...formData, servico_descricao: '', valor_bruto: '' })
+        setFormData({ ...formData, servico_descricao: '', valor_bruto: isValeFixo ? formData.valor_bruto : '' })
     }
 
     const handleSubmit = async (e) => {
@@ -185,10 +209,14 @@ export function ServiceForm() {
 
             // Registrar cliente de vale se for venda de vale
             if (formData.tipo === 'venda_vale') {
+                const valorTotal = parseFloat(formData.valor_bruto)
+                const valorPorUso = parseFloat((valorTotal / 4).toFixed(2))
                 const clientRef = doc(db, 'clientes_vale', formData.cliente_nome.toLowerCase().trim())
                 await setDoc(clientRef, {
                     nome: formData.cliente_nome.trim(),
                     telefone: formData.cliente_telefone.trim(),
+                    valor_por_uso: valorPorUso,
+                    valor_total: valorTotal,
                     updated_at: serverTimestamp()
                 }, { merge: true })
             }
@@ -279,6 +307,38 @@ export function ServiceForm() {
 
                 alert(`Lançamento salvo para ${activeBarber.name}!`)
             }
+
+            // Webhook Make.com — notificar compra ou uso de vale presente
+            if (formData.tipo === 'venda_vale' || formData.forma_pagamento === 'Vale Presente') {
+                const now2 = new Date()
+                const webhookData = {
+                    evento: formData.tipo === 'venda_vale' ? 'compra_vale' : 'uso_vale',
+                    cliente_nome: formData.cliente_nome.trim(),
+                    cliente_telefone: formData.cliente_telefone.trim(),
+                    valor: parseFloat(formData.valor_bruto),
+                    barbeiro: activeBarber.name,
+                    loja: activeBarber.store,
+                    data: now2.toLocaleDateString('pt-BR'),
+                    hora: now2.toLocaleTimeString('pt-BR'),
+                    data_hora_iso: now2.toISOString()
+                }
+                // Adicionar info extra para cada tipo
+                if (formData.tipo === 'venda_vale') {
+                    webhookData.valor_pacote = parseFloat(formData.valor_bruto)
+                    webhookData.valor_por_visita = parseFloat((parseFloat(formData.valor_bruto) / 4).toFixed(2))
+                    webhookData.creditos = 4
+                }
+                if (formData.forma_pagamento === 'Vale Presente') {
+                    webhookData.saldo_restante = (voucherBalance || 0) - 1
+                    webhookData.servico = formData.servico_descricao
+                }
+                fetch('https://hook.us1.make.com/foskacjnw4sc883k1r7m82dsc4nmuhk3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(webhookData)
+                }).catch(err => console.error('Webhook erro:', err))
+            }
+
             setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', cliente_telefone: '', subscriber_code: '' })
             setSelectedPresets([])
             setShowCustomDesc(false)
@@ -390,47 +450,61 @@ export function ServiceForm() {
                                     </span>
                                 )}
                             </div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {SERVICE_PRESETS.map(preset => {
-                                    const isActive = selectedPresets.some(p => p.label === preset.label)
-                                    return (
+                            {/* Se é uso de vale ou venda de vale, mostrar descrição travada */}
+                            {(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) || formData.tipo === 'venda_vale' ? (
+                                <div className={`${formData.tipo === 'venda_vale' ? 'bg-cyan-950/20 border-cyan-700/50' : 'bg-pink-950/20 border-pink-700/50'} border rounded-lg px-4 py-3`}>
+                                    <div className={`text-xs font-bold uppercase tracking-wider mb-1 ${formData.tipo === 'venda_vale' ? 'text-cyan-400' : 'text-pink-400'}`}>
+                                        {formData.tipo === 'venda_vale' ? 'Venda de Pacote Vale Presente' : 'Serviço do Vale Presente'}
+                                    </div>
+                                    <div className="text-sm text-gray-200">
+                                        {formData.tipo === 'venda_vale' ? 'Compra de pacote' : (formData.servico_descricao || 'Uso Vale Presente')}
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {SERVICE_PRESETS.map(preset => {
+                                            const isActive = selectedPresets.some(p => p.label === preset.label)
+                                            return (
+                                                <button
+                                                    key={preset.label}
+                                                    type="button"
+                                                    onClick={() => handlePresetToggle(preset)}
+                                                    className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all active:scale-95 ${isActive
+                                                        ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/30 ring-1 ring-cyan-400/30'
+                                                        : 'bg-gray-950 border border-gray-800 text-gray-300 hover:border-gray-600'
+                                                        }`}
+                                                >
+                                                    {preset.label}
+                                                    <span className={`ml-1 text-[10px] ${isActive ? 'text-cyan-200' : 'text-gray-600'}`}>
+                                                        {preset.value}
+                                                    </span>
+                                                </button>
+                                            )
+                                        })}
                                         <button
-                                            key={preset.label}
                                             type="button"
-                                            onClick={() => handlePresetToggle(preset)}
-                                            className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all active:scale-95 ${isActive
-                                                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/30 ring-1 ring-cyan-400/30'
-                                                : 'bg-gray-950 border border-gray-800 text-gray-300 hover:border-gray-600'
+                                            onClick={handleCustomService}
+                                            className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all ${showCustomDesc
+                                                ? 'bg-cyan-600 text-white shadow-lg'
+                                                : 'bg-gray-950 border border-gray-800 text-gray-500 hover:border-gray-600'
                                                 }`}
                                         >
-                                            {preset.label}
-                                            <span className={`ml-1 text-[10px] ${isActive ? 'text-cyan-200' : 'text-gray-600'}`}>
-                                                {preset.value}
-                                            </span>
+                                            Outro...
                                         </button>
-                                    )
-                                })}
-                                <button
-                                    type="button"
-                                    onClick={handleCustomService}
-                                    className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all ${showCustomDesc
-                                        ? 'bg-cyan-600 text-white shadow-lg'
-                                        : 'bg-gray-950 border border-gray-800 text-gray-500 hover:border-gray-600'
-                                        }`}
-                                >
-                                    Outro...
-                                </button>
-                            </div>
-                            {/* Combined description preview */}
-                            {selectedPresets.length > 0 && (
-                                <div className="mt-2 text-xs text-gray-400 bg-gray-950 rounded-lg px-3 py-1.5 border border-gray-800">
-                                    {formData.servico_descricao}
-                                </div>
+                                    </div>
+                                    {/* Combined description preview */}
+                                    {selectedPresets.length > 0 && (
+                                        <div className="mt-2 text-xs text-gray-400 bg-gray-950 rounded-lg px-3 py-1.5 border border-gray-800">
+                                            {formData.servico_descricao}
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
 
-                        {/* Custom description (only when "Outro" selected) */}
-                        {showCustomDesc && (
+                        {/* Custom description (only when "Outro" selected and NOT vale usage) */}
+                        {showCustomDesc && !(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) && formData.tipo !== 'venda_vale' && (
                             <input
                                 placeholder="Descreva o servico..."
                                 className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 px-4 text-gray-200 outline-none focus:border-cyan-500"
@@ -444,22 +518,38 @@ export function ServiceForm() {
                         <form onSubmit={handleSubmit} className="space-y-4">
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label className="block text-xs text-gray-500 mb-1">Valor (R$)</label>
+                                    <label className="block text-xs text-gray-500 mb-1">
+                                        Valor (R$)
+                                        {formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso && (
+                                            <span className="text-pink-400 ml-1">(fixo pelo vale)</span>
+                                        )}
+                                    </label>
                                     <div className="relative">
                                         <DollarSign className="absolute left-3 top-2.5 text-gray-500" size={16} />
                                         <input type="number" step="0.01"
-                                            className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 pl-9 pr-3 text-gray-200 outline-none focus:border-cyan-500 text-lg font-bold"
+                                            className={`w-full bg-gray-950 border rounded-lg py-2.5 pl-9 pr-3 text-gray-200 outline-none text-lg font-bold ${formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso ? 'border-pink-700/50 bg-pink-950/20 cursor-not-allowed' : 'border-gray-800 focus:border-cyan-500'}`}
                                             value={formData.valor_bruto}
                                             onChange={e => setFormData({ ...formData, valor_bruto: e.target.value })}
+                                            readOnly={formData.forma_pagamento === 'Vale Presente' && !!voucherValorPorUso}
                                         />
                                     </div>
                                 </div>
                                 <div>
                                     <label className="block text-xs text-gray-500 mb-1">Tipo</label>
                                     <select
-                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 px-3 text-gray-200 outline-none focus:border-cyan-500"
+                                        className={`w-full bg-gray-950 border rounded-lg py-2.5 px-3 text-gray-200 outline-none ${formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso ? 'border-pink-700/50 bg-pink-950/20 cursor-not-allowed' : 'border-gray-800 focus:border-cyan-500'}`}
                                         value={formData.tipo}
-                                        onChange={e => setFormData({ ...formData, tipo: e.target.value })}
+                                        onChange={e => {
+                                            const newTipo = e.target.value
+                                            if (newTipo === 'venda_vale') {
+                                                setSelectedPresets([])
+                                                setShowCustomDesc(false)
+                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: 'Compra de pacote' })
+                                            } else {
+                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: newTipo === 'servico' ? '' : formData.servico_descricao })
+                                            }
+                                        }}
+                                        disabled={formData.forma_pagamento === 'Vale Presente' && !!voucherValorPorUso}
                                     >
                                         <option value="servico">Servico</option>
                                         <option value="produto">Produto</option>
@@ -580,9 +670,10 @@ export function ServiceForm() {
                                                     </div>
                                                     <button type="button"
                                                         onClick={() => {
-                                                            setFormData({ ...formData, cliente_nome: '', cliente_telefone: '' })
+                                                            setFormData({ ...formData, cliente_nome: '', cliente_telefone: '', valor_bruto: '' })
                                                             setVoucherSearch('')
                                                             setVoucherBalance(null)
+                                                            setVoucherValorPorUso(null)
                                                         }}
                                                         className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
                                                     >trocar</button>
@@ -670,7 +761,10 @@ export function ServiceForm() {
                                             <div className="grid grid-cols-3 gap-2">
                                                 {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
                                                     const noPlano = planos.length === 0
-                                                    const disabled = (onlyPlano && pm !== 'Assinante') || (isMixed && (pm === 'Assinante' || pm === 'Vale Presente')) || (noPlano && pm === 'Assinante')
+                                                    const isVendaVale = formData.tipo === 'venda_vale'
+                                                    const isVendaAssinatura = formData.tipo === 'venda_assinatura'
+                                                    const isVendaEspecial = isVendaVale || isVendaAssinatura
+                                                    const disabled = (onlyPlano && pm !== 'Assinante') || (isMixed && (pm === 'Assinante' || pm === 'Vale Presente')) || (noPlano && pm === 'Assinante') || (isVendaEspecial && (pm === 'Vale Presente' || pm === 'Assinante'))
                                                     return (
                                                         <button type="button" key={pm}
                                                             onClick={() => !disabled && setFormData({ ...formData, forma_pagamento: pm })}

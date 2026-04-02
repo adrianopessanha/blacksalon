@@ -32,5 +32,10 @@ service cloud.firestore {
     match /movimentacoes/{docId} {
       allow read, write: if isAuthenticated();
     }
+
+    // NOVA coleção — Clientes Vale Presente
+    match /clientes_vale/{docId} {
+      allow read, write: if isAuthenticated();
+    }
   }
 }
