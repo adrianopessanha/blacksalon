@@ -947,7 +947,7 @@ export function ServiceForm() {
 
                                     // Determinar se pode editar/excluir (apenas Admin pode editar passado, outros apenas o dia atual)
                                     const launchDateStr = new Date(item.data.seconds * 1000).toISOString().split('T')[0];
-                                    const canEditDelete = isAdmin || launchDateStr === todayStr;
+                                    const canEditDelete = isAdmin || launchDateStr === today;
 
                                     return (
                                         <div key={item.id} className="px-4 py-2.5 flex items-center justify-between">
