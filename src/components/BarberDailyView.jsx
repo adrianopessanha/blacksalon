@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { db, collection, addDoc, serverTimestamp, deleteDoc, doc } from '../firebase'
+import { db, collection, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from '../firebase'
 import { DollarSign, TrendingUp, Clock, Wallet, CheckCircle, Trash2, MessageCircle, ShoppingBag, Users, Sparkles, Pencil, Target, Scissors, X } from 'lucide-react'
 
-export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, stats, statsLoading, dynamicGoal }) {
+export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, stats, statsLoading, dynamicGoal, isViewingPast = false }) {
     const todayDay = new Date().getDay()
     const isOffDay = todayDay === 0 || todayDay === 1
 
@@ -10,6 +10,8 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
     const [advanceValue, setAdvanceValue] = useState('')
     const [processing, setProcessing] = useState(false)
     const [deleteConfirmation, setDeleteConfirmation] = useState(null)
+    const [editingLaunch, setEditingLaunch] = useState(null)
+    const [editForm, setEditForm] = useState({})
     const [closeCommissionConfirmation, setCloseCommissionConfirmation] = useState(false)
     const [editingGoal, setEditingGoal] = useState(false)
     const [goalInput, setGoalInput] = useState('')
@@ -133,6 +135,34 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
         }
     }
 
+    const openEditLaunch = (item) => {
+        setEditingLaunch(item.id)
+        setEditForm({
+            valor_bruto: item.valor_bruto,
+            forma_pagamento: item.forma_pagamento,
+            servico_descricao: item.servico_descricao,
+            cliente_nome: item.cliente_nome || ''
+        })
+    }
+
+    const executeEditLaunch = async () => {
+        if (!editingLaunch) return
+        setProcessing(true)
+        try {
+            await updateDoc(doc(db, 'lancamentos', editingLaunch), {
+                valor_bruto: parseFloat(editForm.valor_bruto),
+                forma_pagamento: editForm.forma_pagamento,
+                servico_descricao: editForm.servico_descricao,
+                cliente_nome: editForm.cliente_nome,
+            })
+            setEditingLaunch(null)
+        } catch (e) {
+            alert('Erro ao editar: ' + e.message)
+        } finally {
+            setProcessing(false)
+        }
+    }
+
     // ==========================================
     // COMPUTED VALUES
     // ==========================================
@@ -222,6 +252,7 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
         <div className="space-y-4">
 
             {/* Action Buttons */}
+            {!isViewingPast && (
             <div className="flex gap-2 flex-wrap">
                 <button onClick={handleSendReport}
                     className="text-xs bg-green-900/40 hover:bg-green-800/60 text-green-400 border border-green-800 px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors flex-1 justify-center">
@@ -238,6 +269,7 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
                     </button>
                 )}
             </div>
+            )}
 
             {/* Advance Modal */}
             {showAdvanceModal && (
@@ -505,10 +537,18 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
                                                 {item.comissao_barbeiro >= 0 ? '+' : ''}{fmt(item.comissao_barbeiro)}
                                             </div>
                                         </div>
-                                        <button onClick={() => handleDelete(item.id)}
-                                            className="text-red-500/50 hover:text-red-400 p-1.5 rounded-lg hover:bg-red-900/20 transition-colors">
-                                            <Trash2 size={16} />
-                                        </button>
+                                        {(!isViewingPast || isAdmin) && (
+                                            <div className="flex gap-1">
+                                                <button onClick={() => openEditLaunch(item)}
+                                                    className="text-gray-500 hover:text-cyan-400 p-1.5 rounded-lg hover:bg-gray-800 transition-colors">
+                                                    <Pencil size={16} />
+                                                </button>
+                                                <button onClick={() => handleDelete(item.id)}
+                                                    className="text-gray-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-gray-800 transition-colors">
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )
@@ -532,6 +572,70 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
                             <button onClick={executeDeletion} disabled={processing}
                                 className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-2.5 rounded-xl disabled:opacity-50">
                                 {processing ? 'Excluindo...' : 'Sim, Excluir'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {editingLaunch && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
+                        <div className="bg-gradient-to-r from-cyan-900/20 to-gray-900 p-4 border-b border-gray-800 flex justify-between items-center">
+                            <h3 className="font-bold text-white flex items-center gap-2">
+                                <Pencil size={18} className="text-cyan-400" /> Editar Lançamento
+                            </h3>
+                            <button onClick={() => setEditingLaunch(null)} type="button" className="text-gray-500 hover:text-white p-1">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            <div>
+                                <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Descrição</label>
+                                <input type="text"
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                    value={editForm.servico_descricao}
+                                    onChange={e => setEditForm(prev => ({ ...prev, servico_descricao: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Cliente</label>
+                                <input type="text"
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                    value={editForm.cliente_nome}
+                                    onChange={e => setEditForm(prev => ({ ...prev, cliente_nome: e.target.value }))}
+                                />
+                            </div>
+                            <div className="flex gap-3">
+                                <div className="flex-1">
+                                    <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Valor Bruto</label>
+                                    <input type="number" step="0.01"
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                        value={editForm.valor_bruto}
+                                        onChange={e => setEditForm(prev => ({ ...prev, valor_bruto: e.target.value }))}
+                                    />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Pagamento</label>
+                                    <select
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                        value={editForm.forma_pagamento}
+                                        onChange={e => setEditForm(prev => ({ ...prev, forma_pagamento: e.target.value }))}
+                                    >
+                                        <option value="Dinheiro">Dinheiro</option>
+                                        <option value="Pix">Pix</option>
+                                        <option value="Crédito">Crédito</option>
+                                        <option value="Débito">Débito</option>
+                                        <option value="Vale Presente">Vale Presente</option>
+                                        <option value="Assinante">Assinante</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-4 border-t border-gray-800 bg-gray-900">
+                            <button onClick={executeEditLaunch} disabled={processing} type="button"
+                                className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-xl shadow-lg disabled:opacity-50">
+                                {processing ? 'Salvando...' : 'Salvar Alterações'}
                             </button>
                         </div>
                     </div>

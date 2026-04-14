@@ -1,13 +1,23 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { db, collection, addDoc, serverTimestamp, auth, signOut, query, where, getDocs, doc, setDoc } from '../firebase'
+import { db, collection, addDoc, serverTimestamp, auth, signOut, query, where, getDocs, doc, setDoc, deleteDoc, updateDoc } from '../firebase'
 import { Timestamp } from 'firebase/firestore'
-import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronRight, Search, UserCheck, AlertTriangle, Phone, CreditCard } from 'lucide-react'
+import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronLeft, ChevronRight, Search, UserCheck, AlertTriangle, Phone, CreditCard, Trash2, Pencil, X } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
 import { BarberDailyView } from './BarberDailyView'
 import { BarberRanking } from './BarberRanking'
 import { useBarberStats } from '../hooks/useBarberStats'
 import { useSubscribers } from '../hooks/useSubscribers'
 import { useVoucherClients } from '../hooks/useVoucherClients'
+
+// ==========================================
+// SUBSCRIPTION PLANS
+// ==========================================
+const SUBSCRIPTION_PLANS = [
+    { id: 'cria', label: 'Corte de Cria', value: 80 },
+    { id: 'corte', label: 'Corte Completo', value: 100 },
+    { id: 'cabelo_barba', label: 'Cabelo e Barba', value: 140 },
+    { id: 'barba', label: 'Barba Completa', value: 80 },
+]
 
 // ==========================================
 // SERVICE PRESETS (quick-tap chips, multi-select)
@@ -32,6 +42,7 @@ export function ServiceForm() {
 
     // Tab state
     const [activeTab, setActiveTab] = useState('lancar')
+    const [panelDate, setPanelDate] = useState('')
 
     // State for form and SELECTION
     const [selectedBarberId, setSelectedBarberId] = useState(loggedInBarber?.id || '')
@@ -56,7 +67,11 @@ export function ServiceForm() {
     const [showSubscriberDropdown, setShowSubscriberDropdown] = useState(false)
     const [voucherSearch, setVoucherSearch] = useState('')
     const [showVoucherDropdown, setShowVoucherDropdown] = useState(false)
+    const [selectedPlan, setSelectedPlan] = useState(null)
 
+    const [deleteConfirmation, setDeleteConfirmation] = useState(null)
+    const [editingLaunch, setEditingLaunch] = useState(null)
+    const [editForm, setEditForm] = useState({})
     // Subscribers from Google Sheets (Club)
     const { subscribers, loading: subsLoading, error: subsError } = useSubscribers()
 
@@ -76,10 +91,11 @@ export function ServiceForm() {
     }
     const today = getTodayStr()
 
-    // Shared stats hook
+    // Stats hook - painel usa panelDate, form usa data_manual
+    const panelTargetDate = panelDate || today
     const { stats, loading: statsLoading, dynamicGoal } = useBarberStats(
         activeBarber?.id,
-        formData.data_manual || today
+        activeTab === 'painel' ? panelTargetDate : (formData.data_manual || today)
     )
 
     // Balance lookup for Voucher + valor_por_uso
@@ -163,6 +179,49 @@ export function ServiceForm() {
         setFormData({ ...formData, servico_descricao: '', valor_bruto: isValeFixo ? formData.valor_bruto : '' })
     }
 
+    const handleDeleteLaunch = (id) => setDeleteConfirmation(id)
+
+    const executeDeletion = async () => {
+        if (!deleteConfirmation) return
+        setLoading(true)
+        try {
+            await deleteDoc(doc(db, 'lancamentos', deleteConfirmation))
+            setDeleteConfirmation(null)
+        } catch (e) {
+            alert('Erro ao excluir: ' + e.message)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const openEditLaunch = (item) => {
+        setEditingLaunch(item.id)
+        setEditForm({
+            valor_bruto: item.valor_bruto,
+            forma_pagamento: item.forma_pagamento,
+            servico_descricao: item.servico_descricao,
+            cliente_nome: item.cliente_nome || ''
+        })
+    }
+
+    const executeEditLaunch = async () => {
+        if (!editingLaunch) return
+        setLoading(true)
+        try {
+            await updateDoc(doc(db, 'lancamentos', editingLaunch), {
+                valor_bruto: parseFloat(editForm.valor_bruto),
+                forma_pagamento: editForm.forma_pagamento,
+                servico_descricao: editForm.servico_descricao,
+                cliente_nome: editForm.cliente_nome,
+            })
+            setEditingLaunch(null)
+        } catch (e) {
+            alert('Erro ao editar: ' + e.message)
+        } finally {
+            setLoading(false)
+        }
+    }
+
     const handleSubmit = async (e) => {
         e.preventDefault()
         if (isSubmittingRef.current) return
@@ -188,6 +247,14 @@ export function ServiceForm() {
         const PAGAMENTOS_REAIS = ['Dinheiro', 'Pix', 'Crédito', 'Débito']
         if (['venda_vale', 'venda_assinatura'].includes(formData.tipo) && !PAGAMENTOS_REAIS.includes(formData.forma_pagamento)) {
             return alert('Venda de Assinatura ou Vale Presente só pode ser feita com pagamento real (Dinheiro, Pix, Crédito ou Débito).')
+        }
+
+        if (formData.tipo === 'venda_assinatura' && (!formData.cliente_nome || !formData.cliente_telefone)) {
+            return alert('Para venda de Assinatura, Nome e Telefone do cliente são obrigatórios.')
+        }
+
+        if (formData.tipo === 'venda_assinatura' && !selectedPlan) {
+            return alert('Selecione o plano da assinatura.')
         }
 
         if (formData.tipo === 'venda_vale' && (!formData.cliente_nome || !formData.cliente_telefone)) {
@@ -308,6 +375,30 @@ export function ServiceForm() {
                 alert(`Lançamento salvo para ${activeBarber.name}!`)
             }
 
+            // Webhook Make.com — notificar venda de assinatura
+            if (formData.tipo === 'venda_assinatura') {
+                const now2 = new Date()
+                fetch('https://hook.us1.make.com/qym41xlme1xcqlqcp4eekavzx53h9mut', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        evento: 'venda_assinatura',
+                        cliente_nome: formData.cliente_nome.trim(),
+                        cliente_telefone: formData.cliente_telefone.trim(),
+                        plano: selectedPlan.label,
+                        plano_id: selectedPlan.id,
+                        valor: parseFloat(formData.valor_bruto),
+                        status: 'Paga fora do sistema',
+                        barbeiro: activeBarber.name,
+                        loja: activeBarber.store,
+                        forma_pagamento: formData.forma_pagamento,
+                        data: now2.toLocaleDateString('pt-BR'),
+                        hora: now2.toLocaleTimeString('pt-BR'),
+                        data_hora_iso: now2.toISOString()
+                    })
+                }).catch(err => console.error('Webhook assinatura erro:', err))
+            }
+
             // Webhook Make.com — notificar compra ou uso de vale presente
             if (formData.tipo === 'venda_vale' || formData.forma_pagamento === 'Vale Presente') {
                 const now2 = new Date()
@@ -343,6 +434,7 @@ export function ServiceForm() {
             setSelectedPresets([])
             setShowCustomDesc(false)
             setVoucherBalance(null)
+            setSelectedPlan(null)
         } catch (e) {
             console.error(e)
             alert('Erro ao salvar: ' + e.message)
@@ -450,14 +542,14 @@ export function ServiceForm() {
                                     </span>
                                 )}
                             </div>
-                            {/* Se é uso de vale ou venda de vale, mostrar descrição travada */}
-                            {(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) || formData.tipo === 'venda_vale' ? (
-                                <div className={`${formData.tipo === 'venda_vale' ? 'bg-cyan-950/20 border-cyan-700/50' : 'bg-pink-950/20 border-pink-700/50'} border rounded-lg px-4 py-3`}>
-                                    <div className={`text-xs font-bold uppercase tracking-wider mb-1 ${formData.tipo === 'venda_vale' ? 'text-cyan-400' : 'text-pink-400'}`}>
-                                        {formData.tipo === 'venda_vale' ? 'Venda de Pacote Vale Presente' : 'Serviço do Vale Presente'}
+                            {/* Se é uso de vale, venda de vale ou venda de assinatura, mostrar descrição travada */}
+                            {(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) || formData.tipo === 'venda_vale' || formData.tipo === 'venda_assinatura' ? (
+                                <div className={`${formData.tipo === 'venda_assinatura' ? 'bg-purple-950/20 border-purple-700/50' : formData.tipo === 'venda_vale' ? 'bg-cyan-950/20 border-cyan-700/50' : 'bg-pink-950/20 border-pink-700/50'} border rounded-lg px-4 py-3`}>
+                                    <div className={`text-xs font-bold uppercase tracking-wider mb-1 ${formData.tipo === 'venda_assinatura' ? 'text-purple-400' : formData.tipo === 'venda_vale' ? 'text-cyan-400' : 'text-pink-400'}`}>
+                                        {formData.tipo === 'venda_assinatura' ? 'Venda de Assinatura' : formData.tipo === 'venda_vale' ? 'Venda de Pacote Vale Presente' : 'Serviço do Vale Presente'}
                                     </div>
                                     <div className="text-sm text-gray-200">
-                                        {formData.tipo === 'venda_vale' ? 'Compra de pacote' : (formData.servico_descricao || 'Uso Vale Presente')}
+                                        {formData.servico_descricao || (formData.tipo === 'venda_assinatura' ? 'Venda de assinatura' : formData.tipo === 'venda_vale' ? 'Compra de pacote' : 'Uso Vale Presente')}
                                     </div>
                                 </div>
                             ) : (
@@ -504,7 +596,7 @@ export function ServiceForm() {
                         </div>
 
                         {/* Custom description (only when "Outro" selected and NOT vale usage) */}
-                        {showCustomDesc && !(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) && formData.tipo !== 'venda_vale' && (
+                        {showCustomDesc && !(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) && formData.tipo !== 'venda_vale' && formData.tipo !== 'venda_assinatura' && (
                             <input
                                 placeholder="Descreva o servico..."
                                 className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 px-4 text-gray-200 outline-none focus:border-cyan-500"
@@ -545,7 +637,13 @@ export function ServiceForm() {
                                                 setSelectedPresets([])
                                                 setShowCustomDesc(false)
                                                 setFormData({ ...formData, tipo: newTipo, servico_descricao: 'Compra de pacote' })
+                                            } else if (newTipo === 'venda_assinatura') {
+                                                setSelectedPresets([])
+                                                setShowCustomDesc(false)
+                                                setSelectedPlan(null)
+                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: 'Venda de assinatura', valor_bruto: '' })
                                             } else {
+                                                setSelectedPlan(null)
                                                 setFormData({ ...formData, tipo: newTipo, servico_descricao: newTipo === 'servico' ? '' : formData.servico_descricao })
                                             }
                                         }}
@@ -559,8 +657,8 @@ export function ServiceForm() {
                                 </div>
                             </div>
 
-                            {/* Captura de Telefone (apenas para Venda de Vale) */}
-                            {formData.tipo === 'venda_vale' && (
+                            {/* Captura de Telefone (para Venda de Vale e Venda de Assinatura) */}
+                            {(formData.tipo === 'venda_vale' || formData.tipo === 'venda_assinatura') && (
                                 <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
                                     <label className="block text-xs text-cyan-400 font-bold uppercase tracking-wider">Telefone do Cliente (Obrigatório)</label>
                                     <div className="relative">
@@ -571,6 +669,32 @@ export function ServiceForm() {
                                             value={formData.cliente_telefone}
                                             onChange={e => setFormData({ ...formData, cliente_telefone: e.target.value })}
                                         />
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Seleção de Plano (apenas para Venda de Assinatura) */}
+                            {formData.tipo === 'venda_assinatura' && (
+                                <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
+                                    <label className="block text-xs text-purple-400 font-bold uppercase tracking-wider">Plano</label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {SUBSCRIPTION_PLANS.map(plan => (
+                                            <button
+                                                key={plan.id}
+                                                type="button"
+                                                onClick={() => {
+                                                    setSelectedPlan(plan)
+                                                    setFormData({ ...formData, valor_bruto: plan.value.toString(), servico_descricao: `Venda de assinatura - ${plan.label}` })
+                                                }}
+                                                className={`py-3 px-3 rounded-lg text-sm font-bold transition-all active:scale-95 ${selectedPlan?.id === plan.id
+                                                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/30 ring-1 ring-purple-400/30'
+                                                    : 'bg-gray-950 border border-gray-800 text-gray-300 hover:border-purple-600'
+                                                }`}
+                                            >
+                                                <div>{plan.label}</div>
+                                                <div className={`text-xs mt-0.5 ${selectedPlan?.id === plan.id ? 'text-purple-200' : 'text-gray-600'}`}>R$ {plan.value}/mês</div>
+                                            </button>
+                                        ))}
                                     </div>
                                 </div>
                             )}
@@ -820,6 +944,11 @@ export function ServiceForm() {
                             <div className="divide-y divide-gray-800/50">
                                 {stats.todayServices.slice(0, 3).map(item => {
                                     const isDeduction = item.comissao_barbeiro < 0
+
+                                    // Determinar se pode editar/excluir (apenas Admin pode editar passado, outros apenas o dia atual)
+                                    const launchDateStr = new Date(item.data.seconds * 1000).toISOString().split('T')[0];
+                                    const canEditDelete = isAdmin || launchDateStr === todayStr;
+
                                     return (
                                         <div key={item.id} className="px-4 py-2.5 flex items-center justify-between">
                                             <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -832,6 +961,16 @@ export function ServiceForm() {
                                             <span className={`text-sm font-bold ml-2 ${isDeduction ? 'text-red-400' : 'text-green-500/80'}`}>
                                                 {isDeduction ? '' : '+'}{fmt(item.comissao_barbeiro)}
                                             </span>
+                                            {canEditDelete && (
+                                                <div className="flex gap-1 ml-2">
+                                                    <button onClick={() => openEditLaunch(item)} type="button" className="text-gray-500 hover:text-cyan-400 p-1 rounded hover:bg-gray-800 transition-colors">
+                                                        <Pencil size={14} />
+                                                    </button>
+                                                    <button onClick={() => handleDeleteLaunch(item.id)} type="button" className="text-gray-500 hover:text-red-400 p-1 rounded hover:bg-gray-800 transition-colors">
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     )
                                 })}
@@ -844,19 +983,148 @@ export function ServiceForm() {
             {/* ========== TAB: PAINEL ========== */}
             {activeTab === 'painel' && (
                 <div className="space-y-4">
+                    {/* Date Selector */}
+                    <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-xl p-2">
+                        <button
+                            onClick={() => {
+                                const d = new Date(panelTargetDate)
+                                d.setDate(d.getDate() - 1)
+                                setPanelDate(d.toISOString().split('T')[0])
+                            }}
+                            className="p-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+                        >
+                            <ChevronLeft size={18} />
+                        </button>
+                        <input
+                            type="date"
+                            className="flex-1 bg-gray-950 border border-gray-800 rounded-lg py-2 px-3 text-gray-200 text-center text-sm outline-none focus:border-cyan-500 scheme-dark"
+                            value={panelTargetDate}
+                            max={today}
+                            onChange={e => setPanelDate(e.target.value)}
+                        />
+                        <button
+                            onClick={() => {
+                                if (panelTargetDate < today) {
+                                    const d = new Date(panelTargetDate)
+                                    d.setDate(d.getDate() + 1)
+                                    const next = d.toISOString().split('T')[0]
+                                    setPanelDate(next > today ? '' : next)
+                                }
+                            }}
+                            disabled={panelTargetDate >= today}
+                            className={`p-2 rounded-lg transition-colors ${panelTargetDate >= today ? 'bg-gray-800/50 text-gray-600 cursor-not-allowed' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'}`}
+                        >
+                            <ChevronRight size={18} />
+                        </button>
+                        {panelDate && (
+                            <button
+                                onClick={() => setPanelDate('')}
+                                className="text-xs text-cyan-400 hover:text-cyan-300 px-2 py-1 whitespace-nowrap"
+                            >
+                                Hoje
+                            </button>
+                        )}
+                    </div>
+
                     {activeBarber && (
                         <BarberDailyView
-                            key={activeBarber.id}
+                            key={activeBarber.id + panelTargetDate}
                             barberId={activeBarber.id}
                             barberName={activeBarber.name}
                             isAdmin={isAdmin}
-                            selectedDate={formData.data_manual || today}
+                            selectedDate={panelTargetDate}
                             stats={stats}
                             statsLoading={statsLoading}
                             dynamicGoal={dynamicGoal}
+                            isViewingPast={panelTargetDate < today}
                         />
                     )}
                     <BarberRanking currentBarberId={activeBarber?.id} />
+                </div>
+            )}
+
+            {/* ========== MODALS ========== */}
+            {deleteConfirmation && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-2xl max-w-sm w-full">
+                        <div className="flex items-center gap-3 text-red-500 mb-4">
+                            <div className="bg-red-900/20 p-3 rounded-full"><Trash2 size={24} /></div>
+                            <h3 className="text-lg font-bold">Confirmar Exclusão</h3>
+                        </div>
+                        <p className="text-gray-400 text-sm mb-6">Tem certeza que deseja remover este lancamento?</p>
+                        <div className="flex gap-3">
+                            <button onClick={() => setDeleteConfirmation(null)} type="button"
+                                className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium py-2.5 rounded-xl">Cancelar</button>
+                            <button onClick={executeDeletion} disabled={loading} type="button"
+                                className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-2.5 rounded-xl disabled:opacity-50">
+                                {loading ? 'Excluindo...' : 'Sim, Excluir'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {editingLaunch && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
+                        <div className="bg-gradient-to-r from-cyan-900/20 to-gray-900 p-4 border-b border-gray-800 flex justify-between items-center">
+                            <h3 className="font-bold text-white flex items-center gap-2">
+                                <Pencil size={18} className="text-cyan-400" /> Editar Lançamento
+                            </h3>
+                            <button onClick={() => setEditingLaunch(null)} type="button" className="text-gray-500 hover:text-white p-1">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            <div>
+                                <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Descrição</label>
+                                <input type="text"
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                    value={editForm.servico_descricao}
+                                    onChange={e => setEditForm(prev => ({ ...prev, servico_descricao: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Cliente</label>
+                                <input type="text"
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                    value={editForm.cliente_nome}
+                                    onChange={e => setEditForm(prev => ({ ...prev, cliente_nome: e.target.value }))}
+                                />
+                            </div>
+                            <div className="flex gap-3">
+                                <div className="flex-1">
+                                    <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Valor Bruto</label>
+                                    <input type="number" step="0.01"
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                        value={editForm.valor_bruto}
+                                        onChange={e => setEditForm(prev => ({ ...prev, valor_bruto: e.target.value }))}
+                                    />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Pagamento</label>
+                                    <select
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-500"
+                                        value={editForm.forma_pagamento}
+                                        onChange={e => setEditForm(prev => ({ ...prev, forma_pagamento: e.target.value }))}
+                                    >
+                                        <option value="Dinheiro">Dinheiro</option>
+                                        <option value="Pix">Pix</option>
+                                        <option value="Crédito">Crédito</option>
+                                        <option value="Débito">Débito</option>
+                                        <option value="Vale Presente">Vale Presente</option>
+                                        <option value="Assinante">Assinante</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-4 border-t border-gray-800 bg-gray-900">
+                            <button onClick={executeEditLaunch} disabled={loading} type="button"
+                                className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-xl shadow-lg disabled:opacity-50">
+                                {loading ? 'Salvando...' : 'Salvar Alterações'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
