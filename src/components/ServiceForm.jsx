@@ -34,6 +34,31 @@ const SERVICE_PRESETS = [
     { label: 'B plano', desc: 'Barba plano', value: 20 },
 ]
 
+// ==========================================
+// PHONE NORMALIZATION
+// Normaliza qualquer formato para 11 dígitos: DDD + número
+// Ex.: "(21) 98000-0000", "+55 21 98000-0000", "5521980000000",
+//      "21 980000000", "980000000" -> "21980000000"
+// Se vier só 9 dígitos (sem DDD), assume DDD 21 (Rio de Janeiro).
+// Retorna string vazia se não for possível normalizar.
+// ==========================================
+function normalizePhone(raw) {
+    if (!raw) return ''
+    let digits = String(raw).replace(/\D/g, '')
+    if (!digits) return ''
+    // Remove código do país 55 se presente (12 ou 13 dígitos)
+    if (digits.length === 13 && digits.startsWith('55')) digits = digits.slice(2)
+    if (digits.length === 12 && digits.startsWith('55')) digits = digits.slice(2)
+    // Remove zero inicial do DDD (0XX)
+    if (digits.length === 12 && digits.startsWith('0')) digits = digits.slice(1)
+    if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1)
+    // Sem DDD: 8 ou 9 dígitos -> assume DDD 21
+    if (digits.length === 9 || digits.length === 8) digits = '21' + digits
+    // Fixo com DDD (10 dígitos) -> mantém como está
+    // Celular com DDD (11 dígitos) -> formato alvo
+    return digits
+}
+
 export function ServiceForm() {
     // Auto-detect login
     const currentUserEmail = auth.currentUser?.email
@@ -68,6 +93,10 @@ export function ServiceForm() {
     const [voucherSearch, setVoucherSearch] = useState('')
     const [showVoucherDropdown, setShowVoucherDropdown] = useState(false)
     const [selectedPlan, setSelectedPlan] = useState(null)
+
+    const [splitPayment, setSplitPayment] = useState(false)
+    const [splitForma2, setSplitForma2] = useState('Crédito')
+    const [splitValor1, setSplitValor1] = useState('')
 
     const [deleteConfirmation, setDeleteConfirmation] = useState(null)
     const [editingLaunch, setEditingLaunch] = useState(null)
@@ -238,9 +267,12 @@ export function ServiceForm() {
             return alert('Selecione o assinante da lista para lançar com pagamento Assinante.')
         }
         if (needsSubscriber && subscribers.length > 0) {
-            const isValid = subscribers.some(s => s.name.toLowerCase() === formData.cliente_nome.toLowerCase())
-            if (!isValid) {
-                return alert(`"${formData.cliente_nome}" não está na lista de assinantes ativos. Selecione um assinante válido.`)
+            const match = subscribers.find(s => s.name.toLowerCase() === formData.cliente_nome.toLowerCase())
+            if (!match) {
+                return alert(`"${formData.cliente_nome}" não está na lista de assinantes. Selecione um assinante válido.`)
+            }
+            if (match.status !== 'ativo') {
+                return alert(`"${formData.cliente_nome}" está com assinatura ${match.rawStatus || 'INATIVA'}. Só é possível lançar como Assinante para status "Paga fora do sistema" ou "Capturada na Operadora".`)
             }
         }
 
@@ -281,7 +313,7 @@ export function ServiceForm() {
                 const clientRef = doc(db, 'clientes_vale', formData.cliente_nome.toLowerCase().trim())
                 await setDoc(clientRef, {
                     nome: formData.cliente_nome.trim(),
-                    telefone: formData.cliente_telefone.trim(),
+                    telefone: normalizePhone(formData.cliente_telefone),
                     valor_por_uso: valorPorUso,
                     valor_total: valorTotal,
                     updated_at: serverTimestamp()
@@ -358,6 +390,37 @@ export function ServiceForm() {
                 })
 
                 alert(`2 lançamentos salvos para ${activeBarber.name}!\n• ${planoDesc} (Assinante)\n• ${avulsoDesc} (${formData.forma_pagamento})`)
+            } else if (splitPayment && (formData.tipo === 'servico' || formData.tipo === 'produto')) {
+                const valorTotal = parseFloat(formData.valor_bruto)
+                const valor1 = parseFloat(splitValor1)
+                if (isNaN(valor1) || valor1 <= 0 || valor1 >= valorTotal) {
+                    return alert(`Valor da 1ª forma deve ser maior que 0 e menor que o total (R$ ${valorTotal.toFixed(2)}).`)
+                }
+                if (formData.forma_pagamento === splitForma2) {
+                    return alert('As duas formas de pagamento devem ser diferentes.')
+                }
+                const valor2 = parseFloat((valorTotal - valor1).toFixed(2))
+                const comissao1 = calcComissao(valor1, formData.forma_pagamento, formData.tipo)
+                const comissao2 = calcComissao(valor2, splitForma2, formData.tipo)
+
+                await addDoc(collection(db, 'lancamentos'), {
+                    ...baseEntry,
+                    servico_descricao: formData.servico_descricao,
+                    valor_bruto: valor1,
+                    forma_pagamento: formData.forma_pagamento,
+                    comissao_barbeiro: comissao1,
+                    tipo: formData.tipo
+                })
+                await addDoc(collection(db, 'lancamentos'), {
+                    ...baseEntry,
+                    servico_descricao: formData.servico_descricao,
+                    valor_bruto: valor2,
+                    forma_pagamento: splitForma2,
+                    comissao_barbeiro: comissao2,
+                    tipo: formData.tipo
+                })
+
+                alert(`2 lançamentos salvos para ${activeBarber.name}!\n• R$ ${valor1.toFixed(2)} (${formData.forma_pagamento})\n• R$ ${valor2.toFixed(2)} (${splitForma2})`)
             } else {
                 // Lançamento único normal
                 const valor = parseFloat(formData.valor_bruto)
@@ -378,13 +441,15 @@ export function ServiceForm() {
             // Webhook Make.com — notificar venda de assinatura
             if (formData.tipo === 'venda_assinatura') {
                 const now2 = new Date()
+                const telefoneNormalizado = normalizePhone(formData.cliente_telefone)
                 fetch('https://hook.us1.make.com/qym41xlme1xcqlqcp4eekavzx53h9mut', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         evento: 'venda_assinatura',
                         cliente_nome: formData.cliente_nome.trim(),
-                        cliente_telefone: formData.cliente_telefone.trim(),
+                        telefone: telefoneNormalizado,
+                        cliente_telefone: telefoneNormalizado,
                         plano: selectedPlan.label,
                         plano_id: selectedPlan.id,
                         valor: parseFloat(formData.valor_bruto),
@@ -402,10 +467,12 @@ export function ServiceForm() {
             // Webhook Make.com — notificar compra ou uso de vale presente
             if (formData.tipo === 'venda_vale' || formData.forma_pagamento === 'Vale Presente') {
                 const now2 = new Date()
+                const telefoneNormalizado = normalizePhone(formData.cliente_telefone)
                 const webhookData = {
                     evento: formData.tipo === 'venda_vale' ? 'compra_vale' : 'uso_vale',
                     cliente_nome: formData.cliente_nome.trim(),
-                    cliente_telefone: formData.cliente_telefone.trim(),
+                    telefone: telefoneNormalizado,
+                    cliente_telefone: telefoneNormalizado,
                     valor: parseFloat(formData.valor_bruto),
                     barbeiro: activeBarber.name,
                     loja: activeBarber.store,
@@ -435,6 +502,8 @@ export function ServiceForm() {
             setShowCustomDesc(false)
             setVoucherBalance(null)
             setSelectedPlan(null)
+            setSplitPayment(false)
+            setSplitValor1('')
         } catch (e) {
             console.error(e)
             alert('Erro ao salvar: ' + e.message)
@@ -525,7 +594,7 @@ export function ServiceForm() {
                                     onChange={(e) => setSelectedBarberId(e.target.value)}
                                     className="w-full bg-gray-900 text-white font-medium p-2 rounded border border-gray-700 focus:border-cyan-500 outline-none"
                                 >
-                                    {BARBERS.map(b => (
+                                    {BARBERS.filter(b => !b.inactive).map(b => (
                                         <option key={b.id} value={b.id}>{b.name} ({b.store})</option>
                                     ))}
                                 </select>
@@ -709,8 +778,10 @@ export function ServiceForm() {
 
                                 if (needsSubscriber) {
                                     const filtered = subscribers.filter(s =>
+                                        s.status === 'ativo' &&
                                         s.name.toLowerCase().includes(subscriberSearch.toLowerCase())
                                     )
+                                    const activeCount = subscribers.filter(s => s.status === 'ativo').length
                                     return (
                                         <div className="relative">
                                             <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
@@ -733,7 +804,7 @@ export function ServiceForm() {
                                                     <div className="relative">
                                                         <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
                                                         <input
-                                                            placeholder={`Buscar assinante (${subscribers.length} ativos)`}
+                                                            placeholder={`Buscar assinante (${activeCount} ativos)`}
                                                             className="w-full bg-gray-950 border border-purple-700/50 rounded-lg py-2 pl-8 pr-3 text-gray-200 outline-none focus:border-purple-500 text-sm"
                                                             value={subscriberSearch}
                                                             onChange={e => { setSubscriberSearch(e.target.value); setShowSubscriberDropdown(true) }}
@@ -909,6 +980,67 @@ export function ServiceForm() {
                                     )
                                 })()}
                             </div>
+
+                            {/* Split Payment */}
+                            {(formData.tipo === 'servico' || formData.tipo === 'produto') &&
+                             formData.forma_pagamento !== 'Vale Presente' &&
+                             formData.forma_pagamento !== 'Assinante' &&
+                             selectedPresets.filter(p => p.label.includes('plano')).length === 0 && (
+                                <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 space-y-2">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={splitPayment}
+                                            onChange={e => {
+                                                setSplitPayment(e.target.checked)
+                                                if (e.target.checked && formData.valor_bruto) {
+                                                    const half = (parseFloat(formData.valor_bruto) / 2).toFixed(2)
+                                                    setSplitValor1(half)
+                                                }
+                                            }}
+                                            className="w-4 h-4 accent-cyan-500"
+                                        />
+                                        <span className="text-xs text-gray-300 font-semibold uppercase tracking-wider">Mesclar forma de pagamento</span>
+                                    </label>
+                                    {splitPayment && (
+                                        <div className="space-y-2 pt-1">
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div>
+                                                    <label className="block text-[10px] text-gray-500 mb-1">Valor em {formData.forma_pagamento}</label>
+                                                    <input type="number" step="0.01"
+                                                        className="w-full bg-gray-900 border border-gray-800 rounded-lg py-2 px-2 text-gray-200 outline-none focus:border-cyan-500 text-sm"
+                                                        value={splitValor1}
+                                                        onChange={e => setSplitValor1(e.target.value)}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] text-gray-500 mb-1">Restante</label>
+                                                    <div className="w-full bg-gray-900 border border-gray-800 rounded-lg py-2 px-2 text-gray-400 text-sm">
+                                                        {formData.valor_bruto && splitValor1
+                                                            ? `R$ ${(parseFloat(formData.valor_bruto) - parseFloat(splitValor1 || 0)).toFixed(2)}`
+                                                            : '—'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] text-gray-500 mb-1">2ª forma de pagamento</label>
+                                                <div className="grid grid-cols-4 gap-1.5">
+                                                    {['Dinheiro', 'Pix', 'Crédito', 'Débito'].filter(pm => pm !== formData.forma_pagamento).map(pm => (
+                                                        <button type="button" key={pm}
+                                                            onClick={() => setSplitForma2(pm)}
+                                                            className={`text-xs py-2 px-1 rounded-lg border transition-all ${splitForma2 === pm
+                                                                ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
+                                                                : 'bg-gray-900 border-gray-800 text-gray-400'}`}
+                                                        >
+                                                            {pm}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             {/* Date (admin only) */}
                             {isAdmin && (

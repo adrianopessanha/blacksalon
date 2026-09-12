@@ -80,17 +80,23 @@ export function ClubLookup() {
                 {filtered.map((client, i) => {
                     const isAtivo = client.status === 'ativo'
                     
-                    // Simple logic to find the NEXT billing date
+                    // Ativo: próxima cobrança. Inativo: última cobrança vencida (data que já passou).
                     const now = new Date()
                     const bDay = client.billingDay || 1
-                    let nextBilling = new Date(now.getFullYear(), now.getMonth(), bDay)
-                    if (now.getDate() >= bDay) {
-                        nextBilling.setMonth(nextBilling.getMonth() + 1)
+                    let displayDate = new Date(now.getFullYear(), now.getMonth(), bDay)
+                    if (isAtivo) {
+                        if (now.getDate() >= bDay) {
+                            displayDate.setMonth(displayDate.getMonth() + 1)
+                        }
+                    } else {
+                        if (now.getDate() < bDay) {
+                            displayDate.setMonth(displayDate.getMonth() - 1)
+                        }
                     }
-                    const nextBillingStr = nextBilling.toLocaleDateString('pt-BR', { 
-                        day: '2-digit', 
-                        month: '2-digit', 
-                        year: 'numeric' 
+                    const nextBillingStr = displayDate.toLocaleDateString('pt-BR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric'
                     })
 
                     return (
@@ -112,7 +118,7 @@ export function ClubLookup() {
                                             </div>
                                         )}
                                         <div className="flex items-center gap-2 text-[13px] text-gray-400">
-                                            <span className="text-gray-600 font-medium">Vencimento:</span> 
+                                            <span className="text-gray-600 font-medium">{isAtivo ? 'Vencimento:' : 'Vencido em:'}</span>
                                             <span className={isAtivo ? 'text-emerald-400/80' : 'text-red-400/80'}>
                                                 {nextBillingStr}
                                             </span>
