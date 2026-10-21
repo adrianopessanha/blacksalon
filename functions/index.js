@@ -6,14 +6,11 @@ const { timingSafeEqual } = require("crypto");
 const { parseAgendamento } = require("./agendamento");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
+// Deve bater com o webhookSecret enviado pelo site de vale presente
+const VALE_WEBHOOK_SECRET = defineSecret("VALE_WEBHOOK_SECRET");
 
 initializeApp();
 const db = getFirestore();
-
-// ==========================================
-// WEBHOOK SECRET — deve bater com o enviado pelo site de vale presente
-// ==========================================
-const WEBHOOK_SECRET = "753951";
 
 // ==========================================
 // BARBEIRO PADRÃO para vendas do site (Adriano - admin)
@@ -34,6 +31,7 @@ exports.webhookValePresente = onRequest(
         region: "southamerica-east1",
         maxInstances: 10,
         invoker: "public",
+        secrets: [VALE_WEBHOOK_SECRET],
     },
     async (req, res) => {
         // Apenas POST
@@ -45,8 +43,8 @@ exports.webhookValePresente = onRequest(
             const payload = req.body;
 
             // 1. Validar webhook secret
-            if (payload.webhookSecret !== WEBHOOK_SECRET) {
-                console.error("Webhook secret inválido:", payload.webhookSecret);
+            if (!segredoConfere(payload?.webhookSecret, VALE_WEBHOOK_SECRET.value())) {
+                console.error("Webhook secret inválido");
                 return res.status(401).json({ error: "Unauthorized - invalid webhook secret" });
             }
 
