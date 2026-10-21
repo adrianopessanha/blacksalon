@@ -1,3 +1,11 @@
+# Chaves de conta de serviço (Google Cloud / Firebase) — nunca versionar
+novo-gestao-comissao-*.json
+make-booksy-writer*.json
+*service-account*.json
+*serviceAccount*.json
+*-credentials.json
+*firebase-adminsdk*.json
+
 # Environment variables
 .env
 .env.local
