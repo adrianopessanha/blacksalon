@@ -34,15 +34,26 @@ const PAYMENT_COLORS = {
 const isFinancial = (item) =>
     ['adiantamento', 'fechamento_comissao'].includes(item.tipo)
 
-// Serviços que NÃO geram receita na hora (Assinante/Vale Presente)
+// Vendas de pacote (assinatura/vale) - receita da LOJA, não do barbeiro
+const isSalePackage = (item) =>
+    ['venda_assinatura', 'venda_vale'].includes(item.tipo)
+
+// Serviços que NÃO geram receita na hora (Assinante/Vale Presente - uso)
 const isNonCashRevenue = (item) =>
     ['Assinante', 'Vale Presente'].includes(item.forma_pagamento)
 
-// Gera receita real (exclui assinante, vale presente, adiantamento, fechamento)
-const isRevenue = (item) => !isFinancial(item) && !isNonCashRevenue(item)
-
-// É um atendimento real (serviço/produto) - inclui assinante e vale presente
+// É um lançamento real (exclui apenas adiantamento/fechamento)
 const isService = (item) => !isFinancial(item)
+
+// Receita da LOJA (inclui tudo que gera dinheiro: serviços, produtos, vendas de pacote)
+// Exclui apenas: financeiro e uso de assinante/vale (que não gera receita na hora)
+const isStoreRevenue = (item) => !isFinancial(item) && !isNonCashRevenue(item)
+
+// Receita do BARBEIRO (exclui vendas de pacote - não infla faturamento do barbeiro)
+const isBarberRevenue = (item) => isStoreRevenue(item) && !isSalePackage(item)
+
+// Serviço do BARBEIRO (exclui vendas de pacote da contagem individual)
+const isBarberService = (item) => isService(item) && !isSalePackage(item)
 
 // =============================================
 // MAIN COMPONENT
@@ -177,25 +188,46 @@ export function ReportsDashboard() {
     const analytics = useMemo(() => {
         if (!data.length) return null
 
-        // Serviços reais (exclui adiantamento/fechamento)
+        // Todos os lançamentos reais (exclui adiantamento/fechamento)
         const services = data.filter(d => isService(d))
-        // Serviços que geram receita (exclui assinante/vale presente também)
-        const revenueItems = data.filter(d => isRevenue(d))
+        // Receita da loja (inclui vendas de pacote)
+        const storeRevenueItems = data.filter(d => isStoreRevenue(d))
+        // Serviços do barbeiro (exclui vendas de pacote)
+        const barberServices = data.filter(d => isBarberService(d))
 
-        // Faturamento = só serviços que geram receita na hora
-        const gross = revenueItems.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-        // Comissão = de TODOS os serviços (incluindo assinante/vale presente, excluindo fechamento/adiantamento)
-        const commission = services.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-        // Comissão separada: serviços com receita (din/pix/cartão) vs assinante/vale presente
-        const commissionRevenue = revenueItems.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-        const commissionNonCash = services.filter(d => isNonCashRevenue(d)).reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-        // Atendimentos = todos os serviços (incluindo assinante/vale presente)
+        // Faturamento LOJA = inclui vendas de pacote, produtos, serviços
+        const gross = storeRevenueItems.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+
+        // === RECEITAS DA LOJA POR CATEGORIA ===
+        // Vendas de assinatura
+        const subscriptionSales = storeRevenueItems.filter(d => d.tipo === 'venda_assinatura')
+        const subscriptionSalesTotal = subscriptionSales.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+        // Vendas de vale presente
+        const voucherSales = storeRevenueItems.filter(d => d.tipo === 'venda_vale')
+        const voucherSalesTotal = voucherSales.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+        // Vendas de produtos
+        const productSales = storeRevenueItems.filter(d => d.tipo === 'produto')
+        const productSalesTotal = productSales.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+        const productSalesCommission = productSales.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        // Vendas de serviços (receita real: din/pix/cartão - exclui uso assinante/vale, exclui produto, exclui vendas de pacote)
+        const serviceSales = storeRevenueItems.filter(d => d.tipo === 'servico' || (!isSalePackage(d) && d.tipo !== 'produto'))
+        const serviceSalesTotal = serviceSales.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+        const serviceSalesCommission = serviceSales.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        // Total de vendas de pacote (assinatura + vale)
+        const salePackageRevenue = subscriptionSalesTotal + voucherSalesTotal
+        // Comissão = de serviços do barbeiro (exclui vendas de pacote que não geram comissão)
+        const commission = barberServices.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        // Comissão separada: serviços com receita (din/pix/cartão) vs assinante/vale presente (uso)
+        const barberRevenueItems = data.filter(d => isBarberRevenue(d))
+        const commissionRevenue = barberRevenueItems.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        const commissionNonCash = barberServices.filter(d => isNonCashRevenue(d)).reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
+        // Atendimentos = todos os serviços reais (inclui vendas de pacote para visibilidade)
         const serviceCount = services.length
         const totalCount = data.length
-        // Ticket Médio = faturamento / atendimentos (incluindo assinante/vale presente)
+        // Ticket Médio = faturamento / atendimentos
         const avgTicket = avg(gross, serviceCount)
 
-        // Payment breakdown (todos os serviços, incluindo assinante/vale presente)
+        // Payment breakdown (todos os lançamentos reais)
         const byPayment = {}
         services.forEach(d => {
             const pm = d.forma_pagamento || 'Outros'
@@ -206,7 +238,7 @@ export function ReportsDashboard() {
         // Total geral para percentuais (inclui tudo)
         const paymentTotal = services.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
-        // Service breakdown (todos os serviços reais)
+        // Service breakdown (todos os lançamentos reais)
         const byService = {}
         services.forEach(d => {
             const svc = d.servico_descricao || 'Não especificado'
@@ -227,19 +259,20 @@ export function ReportsDashboard() {
                 : 'Sem data'
             if (!byDay[dateStr]) byDay[dateStr] = { items: [], gross: 0, commission: 0, count: 0 }
             byDay[dateStr].items.push(d)
-            if (isRevenue(d)) byDay[dateStr].gross += parseFloat(d.valor_bruto) || 0
-            if (isService(d)) byDay[dateStr].commission += parseFloat(d.comissao_barbeiro) || 0
+            if (isStoreRevenue(d)) byDay[dateStr].gross += parseFloat(d.valor_bruto) || 0
+            if (isBarberService(d)) byDay[dateStr].commission += parseFloat(d.comissao_barbeiro) || 0
             byDay[dateStr].count++
         })
 
-        // Per-barber breakdown (só serviços reais, exclui fechamento/adiantamento)
+        // Per-barber breakdown (exclui vendas de pacote do faturamento/comissão do barbeiro)
         const byBarber = {}
         data.forEach(d => {
             const bid = d.barbeiro_id || 'unknown'
             const bname = d.barbeiro_nome || 'Desconhecido'
-            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, serviceCount: 0, gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, services: {} }
+            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, serviceCount: 0, gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, salePackageTotal: 0, services: {} }
             byBarber[bid].count++
-            if (isService(d)) {
+            // Serviços do barbeiro (exclui vendas de pacote)
+            if (isBarberService(d)) {
                 byBarber[bid].serviceCount++
                 const com = parseFloat(d.comissao_barbeiro) || 0
                 byBarber[bid].commission += com
@@ -252,7 +285,12 @@ export function ReportsDashboard() {
                 if (!byBarber[bid].services[svc]) byBarber[bid].services[svc] = 0
                 byBarber[bid].services[svc]++
             }
-            if (isRevenue(d)) byBarber[bid].gross += parseFloat(d.valor_bruto) || 0
+            // Vendas de pacote registradas pelo barbeiro (visibilidade, mas não infla faturamento)
+            if (isSalePackage(d) && isStoreRevenue(d)) {
+                byBarber[bid].salePackageTotal += parseFloat(d.valor_bruto) || 0
+            }
+            // Faturamento do barbeiro (exclui vendas de pacote)
+            if (isBarberRevenue(d)) byBarber[bid].gross += parseFloat(d.valor_bruto) || 0
         })
 
         // Subscription metrics
@@ -269,9 +307,30 @@ export function ReportsDashboard() {
         const byStore = {}
         rawData.forEach(d => {
             const store = getStore(d)
-            if (!byStore[store]) byStore[store] = { gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, count: 0 }
-            if (isRevenue(d)) byStore[store].gross += parseFloat(d.valor_bruto) || 0
-            if (isService(d)) {
+            if (!byStore[store]) byStore[store] = {
+                gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, count: 0,
+                subscriptionSales: 0, subscriptionSalesCount: 0,
+                voucherSales: 0, voucherSalesCount: 0,
+                productSales: 0, productSalesCount: 0, productSalesCommission: 0
+            }
+            // Faturamento da loja (inclui vendas de pacote)
+            if (isStoreRevenue(d)) {
+                byStore[store].gross += parseFloat(d.valor_bruto) || 0
+                const val = parseFloat(d.valor_bruto) || 0
+                if (d.tipo === 'venda_assinatura') {
+                    byStore[store].subscriptionSales += val
+                    byStore[store].subscriptionSalesCount++
+                } else if (d.tipo === 'venda_vale') {
+                    byStore[store].voucherSales += val
+                    byStore[store].voucherSalesCount++
+                } else if (d.tipo === 'produto') {
+                    byStore[store].productSales += val
+                    byStore[store].productSalesCount++
+                    byStore[store].productSalesCommission += parseFloat(d.comissao_barbeiro) || 0
+                }
+            }
+            // Comissões (só de serviços do barbeiro, exclui vendas de pacote)
+            if (isBarberService(d)) {
                 const com = parseFloat(d.comissao_barbeiro) || 0
                 byStore[store].commission += com
                 if (isNonCashRevenue(d)) {
@@ -279,8 +338,8 @@ export function ReportsDashboard() {
                 } else {
                     byStore[store].commissionRevenue += com
                 }
-                byStore[store].count++
             }
+            if (isService(d)) byStore[store].count++
         })
 
         // Best day
@@ -296,7 +355,11 @@ export function ReportsDashboard() {
         const peakHour = Object.entries(byHour).sort((a, b) => b[1] - a[1])[0]
 
         return {
-            gross, commission, commissionRevenue, commissionNonCash, totalCount, serviceCount, avgTicket, paymentTotal,
+            gross, salePackageRevenue, commission, commissionRevenue, commissionNonCash, totalCount, serviceCount, avgTicket, paymentTotal,
+            serviceSalesTotal, serviceSalesCount: serviceSales.length, serviceSalesCommission,
+            subscriptionSalesTotal, subscriptionSalesCount: subscriptionSales.length,
+            voucherSalesTotal, voucherSalesCount: voucherSales.length,
+            productSalesTotal, productSalesCount: productSales.length, productSalesCommission,
             byPayment, topServices, byDay, byBarber, byStore,
             subCount: subData.length, subCommissionCost, internalRevenue,
             bestDay, peakHour
@@ -643,12 +706,15 @@ export function ReportsDashboard() {
                     {analytics && (
                         <>
                             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-                                <MetricCard label="Faturamento Bruto" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
+                                <MetricCard label="Faturamento Loja" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
                                 <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="orange" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
                                 <MetricCard label="Resultado Líquido" value={fmt(analytics.gross - analytics.commission)} icon={Banknote} color="emerald" />
                                 <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
                             </div>
+
+                            {/* === VENDAS DA LOJA (4 categorias) === */}
+                            <StoreSalesCards analytics={analytics} />
 
                             {/* Store Comparison */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -664,6 +730,17 @@ export function ReportsDashboard() {
                                                 <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded-full">{s.count} atend.</span>
                                             </div>
                                             <div className="text-2xl font-bold text-gray-100">{fmt(s.gross)}</div>
+                                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+                                                {s.subscriptionSalesCount > 0 && (
+                                                    <span className="text-xs text-purple-400">Assinaturas: {fmt(s.subscriptionSales)} ({s.subscriptionSalesCount})</span>
+                                                )}
+                                                {s.voucherSalesCount > 0 && (
+                                                    <span className="text-xs text-pink-400">Vales: {fmt(s.voucherSales)} ({s.voucherSalesCount})</span>
+                                                )}
+                                                {s.productSalesCount > 0 && (
+                                                    <span className="text-xs text-amber-400">Produtos: {fmt(s.productSales)} ({s.productSalesCount})</span>
+                                                )}
+                                            </div>
                                             <div className="text-xs text-gray-500 mt-1">Ticket Médio: {fmt(s.count > 0 ? s.gross / s.count : 0)}</div>
                                             <div className="text-xs text-gray-500 mt-0.5">Comissões: {fmt(s.commission)}</div>
                                             <div className="text-[10px] text-gray-600 mt-0.5">Receita: {fmt(s.commissionRevenue)} | Assin/Vale: {fmt(s.commissionNonCash)}</div>
@@ -937,16 +1014,16 @@ function BarberDetailView({ barber, analytics, data }) {
 
     const storeName = STORES.find(s => s.id === barber.store)?.name || barber.store
 
-    // Payment breakdown for this barber (todos os serviços, incluindo assinante/vale)
+    // Payment breakdown for this barber (serviços do barbeiro, exclui vendas de pacote)
     const barberPayments = {}
-    const barberServices = data.filter(d => isService(d))
-    barberServices.forEach(d => {
+    const barberSvcs = data.filter(d => isBarberService(d))
+    barberSvcs.forEach(d => {
         const pm = d.forma_pagamento || 'Outros'
         if (!barberPayments[pm]) barberPayments[pm] = { count: 0, total: 0 }
         barberPayments[pm].count++
         barberPayments[pm].total += parseFloat(d.valor_bruto) || 0
     })
-    const barberPaymentTotal = barberServices.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+    const barberPaymentTotal = barberSvcs.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
     // Services for this barber
     const topServices = Object.entries(barberData.services)
@@ -956,11 +1033,11 @@ function BarberDetailView({ barber, analytics, data }) {
     // Daily performance
     const dailyPerf = {}
     data.forEach(d => {
-        if (!isService(d)) return
+        if (!isBarberService(d)) return
         const dateStr = d.data?.seconds ? new Date(d.data.seconds * 1000).toLocaleDateString('pt-BR') : null
         if (!dateStr) return
         if (!dailyPerf[dateStr]) dailyPerf[dateStr] = { gross: 0, commission: 0, count: 0 }
-        if (isRevenue(d)) dailyPerf[dateStr].gross += parseFloat(d.valor_bruto) || 0
+        if (isBarberRevenue(d)) dailyPerf[dateStr].gross += parseFloat(d.valor_bruto) || 0
         dailyPerf[dateStr].commission += parseFloat(d.comissao_barbeiro) || 0
         dailyPerf[dateStr].count++
     })
@@ -1091,12 +1168,15 @@ function StoreDetailView({ store, analytics, data }) {
 
             {/* Store Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-                <MetricCard label="Faturamento" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
+                <MetricCard label="Faturamento Loja" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
                 <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="orange" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
                 <MetricCard label="Resultado Líquido" value={fmt(analytics.gross - analytics.commission)} icon={Banknote} color="emerald" />
                 <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
             </div>
+
+            {/* Vendas da Loja por Categoria */}
+            <StoreSalesCards analytics={analytics} />
 
             {/* Barber Ranking */}
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-lg">
@@ -1189,6 +1269,49 @@ function StoreDetailView({ store, analytics, data }) {
 // =============================================
 // REUSABLE COMPONENTS
 // =============================================
+
+function StoreSalesCards({ analytics }) {
+    return (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-gray-900 border border-cyan-800/40 p-4 rounded-2xl shadow-lg">
+                <div className="flex items-center gap-2 mb-3">
+                    <div className="bg-cyan-900/40 p-1.5 rounded-lg"><Scissors size={16} className="text-cyan-400" /></div>
+                    <span className="text-sm font-semibold text-gray-300">Venda de Serviços</span>
+                </div>
+                <div className="text-2xl font-bold text-cyan-400">{fmt(analytics.serviceSalesTotal)}</div>
+                <div className="text-xs text-gray-500 mt-1">{analytics.serviceSalesCount} venda(s)</div>
+                <div className="text-[10px] text-gray-600 mt-0.5">Comissão: {fmt(analytics.serviceSalesCommission)}</div>
+            </div>
+            <div className="bg-gray-900 border border-amber-800/40 p-4 rounded-2xl shadow-lg">
+                <div className="flex items-center gap-2 mb-3">
+                    <div className="bg-amber-900/40 p-1.5 rounded-lg"><Store size={16} className="text-amber-400" /></div>
+                    <span className="text-sm font-semibold text-gray-300">Venda de Produtos</span>
+                </div>
+                <div className="text-2xl font-bold text-amber-400">{fmt(analytics.productSalesTotal)}</div>
+                <div className="text-xs text-gray-500 mt-1">{analytics.productSalesCount} venda(s)</div>
+                <div className="text-[10px] text-gray-600 mt-0.5">Comissão: {fmt(analytics.productSalesCommission)}</div>
+            </div>
+            <div className="bg-gray-900 border border-purple-800/40 p-4 rounded-2xl shadow-lg">
+                <div className="flex items-center gap-2 mb-3">
+                    <div className="bg-purple-900/40 p-1.5 rounded-lg"><Star size={16} className="text-purple-400" /></div>
+                    <span className="text-sm font-semibold text-gray-300">Venda de Assinatura</span>
+                </div>
+                <div className="text-2xl font-bold text-purple-400">{fmt(analytics.subscriptionSalesTotal)}</div>
+                <div className="text-xs text-gray-500 mt-1">{analytics.subscriptionSalesCount} venda(s)</div>
+                <div className="text-[10px] text-gray-600 mt-0.5">Sem comissão na venda</div>
+            </div>
+            <div className="bg-gray-900 border border-pink-800/40 p-4 rounded-2xl shadow-lg">
+                <div className="flex items-center gap-2 mb-3">
+                    <div className="bg-pink-900/40 p-1.5 rounded-lg"><Award size={16} className="text-pink-400" /></div>
+                    <span className="text-sm font-semibold text-gray-300">Venda de Vale Presente</span>
+                </div>
+                <div className="text-2xl font-bold text-pink-400">{fmt(analytics.voucherSalesTotal)}</div>
+                <div className="text-xs text-gray-500 mt-1">{analytics.voucherSalesCount} venda(s)</div>
+                <div className="text-[10px] text-gray-600 mt-0.5">Sem comissão na venda</div>
+            </div>
+        </div>
+    )
+}
 
 function MetricCard({ label, value, icon: Icon, color, sub }) {
     const colorMap = {

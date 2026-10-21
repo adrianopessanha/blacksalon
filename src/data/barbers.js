@@ -4,7 +4,7 @@ export const BARBERS = [
     { id: 'jonatas', name: 'Jonatas Ribeiro', store: 'loja-02', email: 'jonatasckt@gmail.com' },
     { id: 'flavio', name: 'Flavio Lima', store: 'loja-02', email: 'flaviolimatkds1230@gmail.com', inactive: true },
     { id: 'leandro', name: 'Leandro Martins', store: 'loja-01', email: 'leanmartins82@gmail.com' },
-    { id: 'rodrigo', name: 'Rodrigo Azevedo', store: 'loja-01', email: 'rhcabelereiro2@gmail.com' },
+    { id: 'rodrigo', name: 'Rodrigo Azevedo', store: 'loja-01', email: 'rhcabelereiro2@gmail.com', inactive: true },
     { id: 'veloso', name: 'Veloso Martins', store: 'loja-01', email: 'martinsveloso075@gmail.com' },
     { id: 'luizfelipe', name: 'Luiz Felipe', store: 'loja-01', email: 'luizfelipecastilho121@gmail.com', inactive: true },
     { id: 'estevao', name: 'Estevao Silva', store: 'loja-01', email: 'ninosanchezs25@gmail.com', inactive: true },

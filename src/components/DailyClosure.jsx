@@ -134,7 +134,7 @@ export function DailyClosure() {
                                 onChange={e => setBarberId(e.target.value)}
                             >
                                 <option value="">Selecione...</option>
-                                {BARBERS.map(barber => (
+                                {BARBERS.filter(b => !b.inactive).map(barber => (
                                     <option key={barber.id} value={barber.id}>{barber.name}</option>
                                 ))}
                             </select>

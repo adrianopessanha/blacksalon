@@ -2,40 +2,59 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isAuthenticated() {
-      return request.auth != null;
+    // Só contas cadastradas manualmente em /usuarios/{uid} têm acesso.
+    // Contas criadas via API REST do Auth (apiKey é pública) não passam aqui.
+    function isAuthorized() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid));
     }
 
-    // Coleções já existentes
+    // Cada usuário só lê o próprio registro; escrita só pelo Console/Admin SDK.
+    match /usuarios/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+
     match /lancamentos/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthorized();
     }
 
     match /despesas/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthorized();
     }
-    
+
     match /comissoes/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthorized();
     }
-    
+
     match /configuracoes/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthorized();
     }
 
-    // NOVA coleção — Financeiro Operacional (v2)
     match /financeiro/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthorized();
     }
 
-    // NOVA coleção — Movimentações de Capital
     match /movimentacoes/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthorized();
     }
 
-    // NOVA coleção — Clientes Vale Presente
     match /clientes_vale/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isAuthorized();
+    }
+
+    match /fechamentos/{docId} {
+      allow read, write: if isAuthorized();
+    }
+
+    // Base de clientes — ID = telefone 55+DDD+número
+    match /clientes/{telefone} {
+      allow read, write: if isAuthorized();
+    }
+
+    // Reservas — ID = {telefone}_{AAAAMMDD}_{HHmm}
+    match /agendamentos/{docId} {
+      allow read, write: if isAuthorized();
     }
   }
 }

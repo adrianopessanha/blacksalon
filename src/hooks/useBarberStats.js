@@ -69,9 +69,12 @@ export function useBarberStats(barberId, targetDateStr) {
                     const date = data.data.toDate()
                     const cycleStartDate = lastClosureDate || startOfMonth
 
+                    // Vendas de pacote (assinatura/vale) são receita da loja, não do barbeiro
+                    const isSalePackage = ['venda_assinatura', 'venda_vale'].includes(data.tipo)
+
                     // Monthly production (for goal)
                     if (date >= startOfMonth) {
-                        if (data.tipo !== 'adiantamento' && data.tipo !== 'fechamento_comissao') {
+                        if (data.tipo !== 'adiantamento' && data.tipo !== 'fechamento_comissao' && !isSalePackage) {
                             mProduction += (data.comissao_barbeiro || 0)
 
                             // Incentive counters
@@ -107,12 +110,12 @@ export function useBarberStats(barberId, targetDateStr) {
                         const isNonRevenue = ['Assinante', 'Vale Presente', 'venda_assinatura', 'venda_vale'].includes(data.forma_pagamento) ||
                             ['venda_assinatura', 'venda_vale', 'adiantamento', 'fechamento_comissao'].includes(data.tipo)
 
-                        if (data.tipo !== 'adiantamento' && data.tipo !== 'fechamento_comissao') {
+                        if (data.tipo !== 'adiantamento' && data.tipo !== 'fechamento_comissao' && !isSalePackage) {
                             tCount++
                             if (!isNonRevenue) tValue += (data.valor_bruto || 0)
                         }
 
-                        if (data.tipo !== 'fechamento_comissao' && data.tipo !== 'adiantamento') {
+                        if (data.tipo !== 'fechamento_comissao' && data.tipo !== 'adiantamento' && !isSalePackage) {
                             tComm += (data.comissao_barbeiro || 0)
                         }
 
