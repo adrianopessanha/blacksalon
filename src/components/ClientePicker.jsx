@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, X, User, Phone, Clock, UserPlus, Loader2 } from 'lucide-react'
-import { useAgendamentosDoDia, buscarClientePorTelefone, cadastrarClienteBalcao } from '../hooks/useClientes'
+import { useAgendamentosDoDia, useAgendamentosAtendidos, buscarClientePorTelefone, cadastrarClienteBalcao } from '../hooks/useClientes'
 import { normalizeTelefone55, formatTelefone, semAcento } from '../utils/phone'
 
 const UNIDADE_LABEL = { '01': 'Unidade 1', '02': 'Unidade 2' }
@@ -45,17 +45,39 @@ export function ClientePicker({ value, onChange, unidade, barbeiroNome, hoje }) 
 
 function PickerModal({ unidade, barbeiroNome, hoje, onClose, onSelect }) {
     const { agendamentos, loading, error } = useAgendamentosDoDia(hoje)
+    const atendidos = useAgendamentosAtendidos(hoje)
     const [busca, setBusca] = useState('')
     const [todasUnidades, setTodasUnidades] = useState(!unidade)
+    const [mostrarAtendidos, setMostrarAtendidos] = useState(false)
     const [modo, setModo] = useState('lista') // lista | telefone
+    const itemRefs = useRef({})
+    const rolouRef = useRef(false)
 
-    const lista = useMemo(() => {
+    const meuNome = semAcento(String(barbeiroNome || '').split(' ')[0])
+    const ehMeu = (a) => !!meuNome && semAcento(a.barbeiro) === meuNome
+
+    const { lista, qtdAtendidos } = useMemo(() => {
         const termo = semAcento(busca)
-        return agendamentos.filter(a =>
+        const visiveis = agendamentos.filter(a =>
             (todasUnidades || a.unidade === unidade) &&
             (!termo || semAcento(a.nome).includes(termo))
         )
-    }, [agendamentos, busca, todasUnidades, unidade])
+        const qtd = visiveis.filter(a => atendidos.has(a.id)).length
+        const filtrada = mostrarAtendidos ? visiveis : visiveis.filter(a => !atendidos.has(a.id))
+        // Meus primeiro, depois os outros; cada grupo por horário (já vem ordenado)
+        const ordenada = [...filtrada.filter(ehMeu), ...filtrada.filter(a => !ehMeu(a))]
+        return { lista: ordenada, qtdAtendidos: qtd }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [agendamentos, atendidos, busca, todasUnidades, unidade, mostrarAtendidos, meuNome])
+
+    useEffect(() => {
+        if (rolouRef.current || loading || !lista.length) return
+        rolouRef.current = true
+        const d = new Date(Date.now() - 60 * 60 * 1000)
+        const corte = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+        const alvo = lista.find(a => String(a.hora) >= corte)
+        if (alvo) itemRefs.current[alvo.id]?.scrollIntoView({ block: 'start' })
+    }, [loading, lista])
 
     const buscaTemDigitos = busca.replace(/\D/g, '').length >= 8
 
@@ -95,17 +117,24 @@ function PickerModal({ unidade, barbeiroNome, hoje, onClose, onSelect }) {
                             )}
                             {lista.map(a => (
                                 <button type="button" key={a.id}
+                                    ref={el => { itemRefs.current[a.id] = el }}
                                     onClick={() => onSelect({ nome: a.nome, telefone: a.telefone, agendamento_id: a.id, barbeiro_agendado: a.barbeiro || null })}
-                                    className="w-full text-left px-4 py-3 border-b border-gray-800/60 hover:bg-cyan-950/30 flex items-center gap-3">
+                                    className={`w-full text-left px-4 py-3 border-b border-gray-800/60 hover:bg-cyan-950/30 flex items-center gap-3 scroll-mt-2 ${ehMeu(a) ? 'border-l-2 border-l-cyan-500 bg-cyan-950/10' : ''} ${atendidos.has(a.id) ? 'opacity-50' : ''}`}>
                                     <span className="text-cyan-400 font-mono text-sm w-12 shrink-0 flex items-center gap-1"><Clock size={12} />{a.hora}</span>
                                     <span className="flex-1 min-w-0">
-                                        <span className="block text-sm text-gray-100 truncate">{a.nome} — {a.hora}</span>
+                                        <span className="block text-sm text-gray-100 truncate">{a.nome}</span>
                                         <span className="block text-[10px] text-gray-500 truncate">
-                                            {a.barbeiro ? `com ${a.barbeiro}` : ''}{todasUnidades && a.unidade ? ` · ${UNIDADE_LABEL[a.unidade] || a.unidade}` : ''}
+                                            {a.barbeiro ? `com ${a.barbeiro}` : ''}{todasUnidades && a.unidade ? ` · ${UNIDADE_LABEL[a.unidade] || a.unidade}` : ''}{atendidos.has(a.id) ? ' · já atendido' : ''}
                                         </span>
                                     </span>
                                 </button>
                             ))}
+                            {qtdAtendidos > 0 && (
+                                <button type="button" onClick={() => setMostrarAtendidos(v => !v)}
+                                    className="w-full text-xs text-gray-500 hover:text-gray-300 py-3">
+                                    {mostrarAtendidos ? 'Ocultar já atendidos' : `Mostrar já atendidos (${qtdAtendidos})`}
+                                </button>
+                            )}
                         </div>
 
                         <div className="p-3 border-t border-gray-800 space-y-2">

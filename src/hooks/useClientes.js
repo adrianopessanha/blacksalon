@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { db, collection, query, where, onSnapshot, doc, setDoc, serverTimestamp } from '../firebase'
-import { getDoc } from 'firebase/firestore'
+import { getDoc, Timestamp } from 'firebase/firestore'
 
 export function storeToUnidade(store) {
     return store === 'loja-01' ? '01' : store === 'loja-02' ? '02' : null
@@ -31,6 +31,24 @@ export function useAgendamentosDoDia(dataStr) {
     }, [dataStr])
 
     return { agendamentos, loading, error }
+}
+
+// IDs de agendamento que já viraram lançamento no dia (AAAA-MM-DD, horário local)
+export function useAgendamentosAtendidos(dataStr) {
+    const [ids, setIds] = useState(() => new Set())
+
+    useEffect(() => {
+        if (!dataStr) return
+        const [y, m, d] = dataStr.split('-').map(Number)
+        const q = query(collection(db, 'lancamentos'), where('data', '>=', Timestamp.fromDate(new Date(y, m - 1, d))))
+        return onSnapshot(q, snap => {
+            const s = new Set()
+            snap.forEach(doc => { const id = doc.data().agendamento_id; if (id) s.add(id) })
+            setIds(s)
+        }, err => console.error('lancamentos do dia:', err))
+    }, [dataStr])
+
+    return ids
 }
 
 export async function buscarClientePorTelefone(tel55) {
