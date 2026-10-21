@@ -1,6 +1,11 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
+const { defineSecret } = require("firebase-functions/params");
+const { timingSafeEqual } = require("crypto");
+const { parseAgendamento } = require("./agendamento");
+
+const MAKE_SECRET = defineSecret("MAKE_SECRET");
 
 initializeApp();
 const db = getFirestore();
@@ -197,6 +202,80 @@ exports.webhookValePresente = onRequest(
                 error: "Internal server error",
                 message: error.message,
             });
+        }
+    }
+);
+
+// ==========================================
+// Reservas do Booksy enviadas pelo Make
+// POST /registrarAgendamento  (header x-make-secret)
+// ==========================================
+function segredoConfere(recebido, esperado) {
+    const a = Buffer.from(String(recebido || ""));
+    const b = Buffer.from(String(esperado || ""));
+    return a.length === b.length && b.length > 0 && timingSafeEqual(a, b);
+}
+
+exports.registrarAgendamento = onRequest(
+    {
+        region: "southamerica-east1",
+        maxInstances: 10,
+        invoker: "public",
+        secrets: [MAKE_SECRET],
+    },
+    async (req, res) => {
+        if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+        if (!segredoConfere(req.get("x-make-secret"), MAKE_SECRET.value())) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const ag = parseAgendamento(req.body);
+        if (!ag.ok) return res.status(422).json({ error: "Dados insuficientes", motivos: ag.erros });
+
+        try {
+            const agRef = db.collection("agendamentos").doc(ag.id);
+            const clienteRef = db.collection("clientes").doc(ag.telefone);
+            const inicio = Timestamp.fromDate(ag.inicio);
+
+            const novo = await db.runTransaction(async (tx) => {
+                const existente = await tx.get(agRef);
+                const dados = {
+                    telefone: ag.telefone,
+                    nome: ag.nome,
+                    unidade: ag.unidade,
+                    barbeiro: ag.barbeiro,
+                    data: ag.data,
+                    hora: ag.hora,
+                    origem: "booksy",
+                };
+                // Reenvio do mesmo e-mail atualiza, mas mantém o criado_em original
+                if (!existente.exists) dados.criado_em = FieldValue.serverTimestamp();
+                tx.set(agRef, dados, { merge: true });
+                tx.set(clienteRef, {
+                    nome: ag.nome,
+                    telefone: ag.telefone,
+                    unidade: ag.unidade,
+                    ultimo_barbeiro: ag.barbeiro,
+                    ultimo_agendamento: inicio,
+                    origem: "booksy",
+                    atualizado_em: FieldValue.serverTimestamp(),
+                }, { merge: true });
+                return !existente.exists;
+            });
+
+            return res.status(200).json({
+                success: true,
+                id: ag.id,
+                novo,
+                nome: ag.nome,
+                data: ag.data,
+                hora: ag.hora,
+                barbeiro: ag.barbeiro,
+                unidade: ag.unidade,
+            });
+        } catch (error) {
+            console.error("registrarAgendamento:", error);
+            return res.status(500).json({ error: "Internal server error" });
         }
     }
 );
