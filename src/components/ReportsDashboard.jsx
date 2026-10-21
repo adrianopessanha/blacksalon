@@ -55,6 +55,18 @@ const isBarberRevenue = (item) => isStoreRevenue(item) && !isSalePackage(item)
 // Serviço do BARBEIRO (exclui vendas de pacote da contagem individual)
 const isBarberService = (item) => isService(item) && !isSalePackage(item)
 
+// Atendimento = serviço feito (inclui assinante); não inclui venda de pacote nem produto
+const isAtendimento = (item) => isBarberService(item) && item.tipo !== 'produto'
+
+// Entra no ticket médio: atendimento pago na hora (exclui uso de assinante/vale)
+const isTicketItem = (item) => isAtendimento(item) && !isNonCashRevenue(item)
+
+const ticketOf = (items) => {
+    const paid = items.filter(isTicketItem)
+    const total = paid.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
+    return { ticketGross: total, ticketCount: paid.length }
+}
+
 // =============================================
 // MAIN COMPONENT
 // =============================================
@@ -221,11 +233,10 @@ export function ReportsDashboard() {
         const barberRevenueItems = data.filter(d => isBarberRevenue(d))
         const commissionRevenue = barberRevenueItems.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
         const commissionNonCash = barberServices.filter(d => isNonCashRevenue(d)).reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-        // Atendimentos = todos os serviços reais (inclui vendas de pacote para visibilidade)
-        const serviceCount = services.length
+        const serviceCount = data.filter(isAtendimento).length
         const totalCount = data.length
-        // Ticket Médio = faturamento / atendimentos
-        const avgTicket = avg(gross, serviceCount)
+        const { ticketGross, ticketCount } = ticketOf(data)
+        const avgTicket = avg(ticketGross, ticketCount)
 
         // Payment breakdown (todos os lançamentos reais)
         const byPayment = {}
@@ -269,11 +280,15 @@ export function ReportsDashboard() {
         data.forEach(d => {
             const bid = d.barbeiro_id || 'unknown'
             const bname = d.barbeiro_nome || 'Desconhecido'
-            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, serviceCount: 0, gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, salePackageTotal: 0, services: {} }
+            if (!byBarber[bid]) byBarber[bid] = { name: bname, count: 0, serviceCount: 0, gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, ticketGross: 0, ticketCount: 0, services: {} }
             byBarber[bid].count++
+            if (isAtendimento(d)) byBarber[bid].serviceCount++
+            if (isTicketItem(d)) {
+                byBarber[bid].ticketGross += parseFloat(d.valor_bruto) || 0
+                byBarber[bid].ticketCount++
+            }
             // Serviços do barbeiro (exclui vendas de pacote)
             if (isBarberService(d)) {
-                byBarber[bid].serviceCount++
                 const com = parseFloat(d.comissao_barbeiro) || 0
                 byBarber[bid].commission += com
                 if (isNonCashRevenue(d)) {
@@ -284,10 +299,6 @@ export function ReportsDashboard() {
                 const svc = d.servico_descricao || 'Outros'
                 if (!byBarber[bid].services[svc]) byBarber[bid].services[svc] = 0
                 byBarber[bid].services[svc]++
-            }
-            // Vendas de pacote registradas pelo barbeiro (visibilidade, mas não infla faturamento)
-            if (isSalePackage(d) && isStoreRevenue(d)) {
-                byBarber[bid].salePackageTotal += parseFloat(d.valor_bruto) || 0
             }
             // Faturamento do barbeiro (exclui vendas de pacote)
             if (isBarberRevenue(d)) byBarber[bid].gross += parseFloat(d.valor_bruto) || 0
@@ -309,6 +320,7 @@ export function ReportsDashboard() {
             const store = getStore(d)
             if (!byStore[store]) byStore[store] = {
                 gross: 0, commission: 0, commissionRevenue: 0, commissionNonCash: 0, count: 0,
+                ticketGross: 0, ticketCount: 0,
                 subscriptionSales: 0, subscriptionSalesCount: 0,
                 voucherSales: 0, voucherSalesCount: 0,
                 productSales: 0, productSalesCount: 0, productSalesCommission: 0
@@ -339,7 +351,11 @@ export function ReportsDashboard() {
                     byStore[store].commissionRevenue += com
                 }
             }
-            if (isService(d)) byStore[store].count++
+            if (isAtendimento(d)) byStore[store].count++
+            if (isTicketItem(d)) {
+                byStore[store].ticketGross += parseFloat(d.valor_bruto) || 0
+                byStore[store].ticketCount++
+            }
         })
 
         // Best day
@@ -741,7 +757,7 @@ export function ReportsDashboard() {
                                                     <span className="text-xs text-amber-400">Produtos: {fmt(s.productSales)} ({s.productSalesCount})</span>
                                                 )}
                                             </div>
-                                            <div className="text-xs text-gray-500 mt-1">Ticket Médio: {fmt(s.count > 0 ? s.gross / s.count : 0)}</div>
+                                            <div className="text-xs text-gray-500 mt-1">Ticket Médio: {fmt(avg(s.ticketGross, s.ticketCount))}</div>
                                             <div className="text-xs text-gray-500 mt-0.5">Comissões: {fmt(s.commission)}</div>
                                             <div className="text-[10px] text-gray-600 mt-0.5">Receita: {fmt(s.commissionRevenue)} | Assin/Vale: {fmt(s.commissionNonCash)}</div>
                                         </div>
@@ -1069,7 +1085,7 @@ function BarberDetailView({ barber, analytics, data }) {
                 <MetricCard label="Comissão (Total)" value={fmt(barberData.commission)} icon={Award} color="orange" sub={`Receita: ${fmt(barberData.commissionRevenue)} | Assin/Vale: ${fmt(barberData.commissionNonCash)}`} />
                 <MetricCard label="Resultado Líquido" value={fmt(barberData.gross - barberData.commission)} icon={Banknote} color="emerald" />
                 <MetricCard label="Atendimentos" value={barberData.serviceCount} icon={Scissors} color="blue" />
-                <MetricCard label="Ticket Médio" value={fmt(avg(barberData.gross, barberData.serviceCount))} icon={TrendingUp} color="yellow" />
+                <MetricCard label="Ticket Médio" value={fmt(avg(barberData.ticketGross, barberData.ticketCount))} icon={TrendingUp} color="yellow" />
             </div>
 
             {/* Payment + Services side by side */}
@@ -1212,7 +1228,7 @@ function StoreDetailView({ store, analytics, data }) {
                                 <div className="flex items-center gap-2 mt-1">
                                     <span className="text-[10px] text-gray-500">Comissão: {fmt(b.commission)}</span>
                                     <span className="text-[10px] text-gray-600">|</span>
-                                    <span className="text-[10px] text-gray-500">Ticket médio: {fmt(avg(b.gross, b.serviceCount))}</span>
+                                    <span className="text-[10px] text-gray-500">Ticket médio: {fmt(avg(b.ticketGross, b.ticketCount))}</span>
                                 </div>
                             </div>
                         </div>
@@ -1433,7 +1449,7 @@ function AllBarbersCard({ byBarber }) {
                                 <td className="py-2.5 px-2 text-right font-semibold text-gray-200">{fmt(b.commission)}</td>
                                 <td className={`py-2.5 px-2 text-right font-semibold ${(b.gross - b.commission) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmt(b.gross - b.commission)}</td>
                                 <td className="py-2.5 px-2 text-center text-gray-400">{b.serviceCount}</td>
-                                <td className="py-2.5 pl-2 text-right text-yellow-400">{fmt(b.serviceCount > 0 ? b.gross / b.serviceCount : 0)}</td>
+                                <td className="py-2.5 pl-2 text-right text-yellow-400">{fmt(avg(b.ticketGross, b.ticketCount))}</td>
                             </tr>
                         ))}
                     </tbody>
