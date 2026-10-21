@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, X, User, Phone, Clock, UserPlus, Loader2 } from 'lucide-react'
-import { useAgendamentosDoDia, useAgendamentosAtendidos, buscarClientePorTelefone, cadastrarClienteBalcao } from '../hooks/useClientes'
+import { useAgendamentosDoDia, useAgendamentosAtendidos, useIsAdmin, buscarClientePorTelefone, cadastrarClienteBalcao } from '../hooks/useClientes'
 import { normalizeTelefone55, formatTelefone, semAcento } from '../utils/phone'
 
 const UNIDADE_LABEL = { '01': 'Unidade 1', '02': 'Unidade 2' }
@@ -46,8 +46,10 @@ export function ClientePicker({ value, onChange, unidade, barbeiroNome, hoje }) 
 function PickerModal({ unidade, barbeiroNome, hoje, onClose, onSelect }) {
     const { agendamentos, loading, error } = useAgendamentosDoDia(hoje)
     const atendidos = useAgendamentosAtendidos(hoje)
+    const isAdmin = useIsAdmin()
     const [busca, setBusca] = useState('')
-    const [todasUnidades, setTodasUnidades] = useState(!unidade)
+    const [adminVerTodas, setAdminVerTodas] = useState(true)
+    const todasUnidades = !unidade || (isAdmin && adminVerTodas)
     const [mostrarAtendidos, setMostrarAtendidos] = useState(false)
     const [modo, setModo] = useState('lista') // lista | telefone
     const itemRefs = useRef({})
@@ -69,6 +71,8 @@ function PickerModal({ unidade, barbeiroNome, hoje, onClose, onSelect }) {
         return { lista: ordenada, qtdAtendidos: qtd }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [agendamentos, atendidos, busca, todasUnidades, unidade, mostrarAtendidos, meuNome])
+
+    useEffect(() => { rolouRef.current = false }, [isAdmin])
 
     useEffect(() => {
         if (rolouRef.current || loading || !lista.length) return
@@ -99,8 +103,8 @@ function PickerModal({ unidade, barbeiroNome, hoje, onClose, onSelect }) {
                                     placeholder="Buscar pelo nome"
                                     className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 pl-8 pr-3 text-gray-200 outline-none focus:border-cyan-500 text-sm" />
                             </div>
-                            {unidade && (
-                                <button type="button" onClick={() => setTodasUnidades(v => !v)}
+                            {isAdmin && unidade && (
+                                <button type="button" onClick={() => setAdminVerTodas(v => !v)}
                                     className={`text-xs px-3 py-1.5 rounded-full border ${todasUnidades ? 'bg-cyan-900/40 border-cyan-600 text-cyan-300' : 'border-gray-700 text-gray-400'}`}>
                                     {todasUnidades ? 'Mostrando todas as unidades' : `Só ${UNIDADE_LABEL[unidade]} · ver todas as unidades`}
                                 </button>

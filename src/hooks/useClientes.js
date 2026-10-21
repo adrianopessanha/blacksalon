@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { db, collection, query, where, onSnapshot, doc, setDoc, serverTimestamp } from '../firebase'
+import { db, auth, collection, query, where, onSnapshot, doc, setDoc, serverTimestamp } from '../firebase'
 import { getDoc, Timestamp } from 'firebase/firestore'
 
 export function storeToUnidade(store) {
@@ -49,6 +49,21 @@ export function useAgendamentosAtendidos(dataStr) {
     }, [dataStr])
 
     return ids
+}
+
+// Admin vem de usuarios/{uid}.admin; enquanto carrega, trata como não-admin
+export function useIsAdmin() {
+    const [isAdmin, setIsAdmin] = useState(false)
+
+    useEffect(() => {
+        const uid = auth.currentUser?.uid
+        if (!uid) return
+        getDoc(doc(db, 'usuarios', uid))
+            .then(snap => setIsAdmin(snap.exists() && snap.data().admin === true))
+            .catch(err => console.error('usuarios:', err))
+    }, [])
+
+    return isAdmin
 }
 
 export async function buscarClientePorTelefone(tel55) {
