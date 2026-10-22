@@ -64,6 +64,7 @@ function parsePagamento(body) {
         telefone,
         transacaoId,
         nome: String(b.nome || "").trim() || null,
+        // O Make já converte para reais; "valor" nunca é dividido aqui
         valor: parseValor(b.valor),
         plano: String(b.plano || "").trim() || null,
         status: String(b.status || "").trim() || null,
@@ -94,6 +95,29 @@ function atualizacaoCliente(p) {
     return base;
 }
 
+const STATUS_ASSINANTE = {
+    cartao_aprovado: "ativa",
+    baixa_manual: "ativa",
+    recusado: "pagamento_recusado",
+    cancelada: "cancelada",
+    outro: "inativa", // Estornada, Expirada
+};
+
+// Campos de assinantes/{telefone}; só inclui nome/plano/valor quando vierem
+function atualizacaoAssinante(p) {
+    const upd = {
+        telefone: p.telefone,
+        origem: "celcoin",
+        status_assinatura: STATUS_ASSINANTE[p.classe],
+        status_original: p.status,
+        codigo_cliente: p.codigoCliente,
+    };
+    if (p.nome) upd.nome = p.nome;
+    if (p.plano) upd.plano = p.plano;
+    if (p.valor != null) upd.valor = p.valor;
+    return upd;
+}
+
 // candidatos: [{ id, valor, dataMs }]. Só os dos últimos 7 dias; prefere valor igual, depois o mais recente.
 function escolherCandidato(candidatos, valor, agoraMs) {
     const recentes = candidatos.filter((c) => c.dataMs != null && agoraMs - c.dataMs <= SETE_DIAS_MS && c.dataMs - agoraMs <= SETE_DIAS_MS);
@@ -103,4 +127,4 @@ function escolherCandidato(candidatos, valor, agoraMs) {
     return pool.sort((a, b) => b.dataMs - a.dataMs)[0];
 }
 
-module.exports = { parsePagamento, atualizacaoCliente, escolherCandidato, classificar, parseValor, parseData };
+module.exports = { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato, classificar, parseValor, parseData };

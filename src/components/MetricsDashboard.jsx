@@ -64,7 +64,7 @@ export function MetricsDashboard() {
                     </div>
 
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
-                        <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-gray-300"><ShieldCheck size={16} className="text-purple-400" /> Assinantes Celcoin</div>
+                        <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-gray-300"><ShieldCheck size={16} className="text-purple-400" /> Assinantes (Celcoin e balcão)</div>
                         <div className="grid grid-cols-3 gap-3 text-center">
                             <Num valor={calc.p.assinantesAtivos} rotulo="ativos" cor="text-emerald-400" />
                             <Num valor={calc.p.assinantesRecusados} rotulo="pagamento recusado" cor="text-yellow-400" />
@@ -91,7 +91,8 @@ export function MetricsDashboard() {
                         render={a => (
                             <Linha key={a.telefone} nome={a.nome} telefone={a.telefone}>
                                 {a.plano && <span>{a.plano}</span>}
-                                {a.ultimo_pagamento_assinatura?.toDate && <span>último pagamento {a.ultimo_pagamento_assinatura.toDate().toLocaleDateString('pt-BR')}</span>}
+                                {a.origem && <span>{a.origem === 'balcao' ? 'balcão' : 'Celcoin'}</span>}
+                                {a.ultima_atualizacao?.toDate && <span>atualizado em {a.ultima_atualizacao.toDate().toLocaleDateString('pt-BR')}</span>}
                             </Linha>
                         )} />
 

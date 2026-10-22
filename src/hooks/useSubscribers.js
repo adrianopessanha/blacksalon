@@ -1,192 +1,45 @@
 import { useState, useEffect } from 'react'
+import { db, collection, onSnapshot } from '../firebase'
 
-const SHEET_ID = '1EEYaNhk_ziJKq1OAdCw8-t95gt93o8TB4aJVC5m3rfQ'
-const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`
-
-// Status que indica assinante ativo
-const ACTIVE_STATUSES = [
-    'capturada na operadora',
-    'paga fora do sistema'
-]
-
-const INACTIVE_STATUSES = [
-    'cancelada ao cancelar a cobrança',
-    'negada na operadora',
-    'estornada',
-    'expirada'
-]
-
-function parseCSV(text) {
-    const lines = []
-    let current = ''
-    let inQuotes = false
-
-    // Simple CSV parser that handles quoted fields
-    for (let i = 0; i < text.length; i++) {
-        const ch = text[i]
-        if (ch === '"') {
-            if (inQuotes && text[i + 1] === '"') {
-                current += '"'
-                i++
-            } else {
-                inQuotes = !inQuotes
-            }
-        } else if (ch === '\n' && !inQuotes) {
-            lines.push(current)
-            current = ''
-        } else if (ch !== '\r') {
-            current += ch
-        }
-    }
-    if (current.trim()) lines.push(current)
-
-    // Parse each line into fields
-    return lines.map(line => {
-        const fields = []
-        let field = ''
-        let inQ = false
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i]
-            if (ch === '"') {
-                if (inQ && line[i + 1] === '"') {
-                    field += '"'
-                    i++
-                } else {
-                    inQ = !inQ
-                }
-            } else if (ch === ',' && !inQ) {
-                fields.push(field.trim())
-                field = ''
-            } else {
-                field += ch
-            }
-        }
-        fields.push(field.trim())
-        return fields
-    })
+const diaDe = (isoDia) => {
+    const d = parseInt(String(isoDia || '').slice(8, 10), 10)
+    return Number.isFinite(d) ? d : null
 }
 
+// Assinantes (Celcoin e balcão) a partir de assinantes/{telefone}.
+// Mantém o formato antigo usado por Lançamento, Consulta Club e Assinaturas.
 export function useSubscribers() {
     const [subscribers, setSubscribers] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
     useEffect(() => {
-        let cancelled = false
-
-        const fetchSubscribers = async () => {
-            try {
-                const res = await fetch(CSV_URL)
-                if (!res.ok) throw new Error(`HTTP ${res.status}`)
-                const text = await res.text()
-                const rows = parseCSV(text)
-
-                if (rows.length < 2) {
-                    setSubscribers([])
-                    return
+        return onSnapshot(collection(db, 'assinantes'), snap => {
+            const lista = snap.docs.map(d => {
+                const a = d.data()
+                return {
+                    name: a.nome || '',
+                    code: a.codigo_cliente || null,
+                    plano: a.plano || '',
+                    phone: a.telefone || d.id,
+                    status: a.status_assinatura === 'ativa' ? 'ativo' : 'inativo',
+                    statusAssinatura: a.status_assinatura || null,
+                    rawStatus: a.status_original || a.status_assinatura || '',
+                    origem: a.origem || null,
+                    billingDay: diaDe(a.inicio_contrato) || diaDe(a.vencimento),
+                    planValue: a.valor ?? null,
+                    contractDate: a.inicio_contrato || '',
+                    vencimento: a.vencimento || null,
                 }
-
-                // Header: Código, Nome do cliente, Plano, Valor, Status, Telefone, Email, CPF, Inicio do contrato, Ultima atualizção
-                const header = rows[0].map(h => h.toLowerCase().replace(/[^a-z0-9]/g, '_'))
-                const nameIdx = header.findIndex(h => h.includes('nome'))
-                const statusIdx = header.findIndex(h => h.includes('status'))
-                const planoIdx = header.findIndex(h => h.includes('plano'))
-                const phoneIdx = header.findIndex(h => h.includes('telefone'))
-                const emailIdx = header.findIndex(h => h.includes('email'))
-                const contractIdx = header.findIndex(h => h.includes('inicio') || h.includes('contrato'))
-                const valorIdx = header.findIndex(h => h.includes('valor'))
-                const codeIdx = header.findIndex(h => h.includes('c_digo') || h.includes('codigo') || h === 'c_digo')
-
-                if (nameIdx === -1 || statusIdx === -1) {
-                    throw new Error('Colunas "Nome" ou "Status" não encontradas')
-                }
-
-                // Build unique active subscribers (last entry wins for duplicates)
-                const subscriberMap = new Map()
-
-                for (let i = 1; i < rows.length; i++) {
-                    const row = rows[i]
-                    const name = (row[nameIdx] || '').trim()
-                    if (!name) continue
-
-                    // Clean malformed data
-                    const cleanName = name.replace(/[}"]/g, '').trim()
-                    if (!cleanName) continue
-
-                    // Status rules from USER:
-                    // Column E (Status) and Column J (Ultima Atualização) usually contain these strings
-                    const colE = (row[statusIdx] || '').trim().toLowerCase()
-                    const colJ = (row[9] || '').trim().toLowerCase() // Column J as requested
-
-                    const isActive = 
-                        ACTIVE_STATUSES.some(s => colE.includes(s)) || 
-                        ACTIVE_STATUSES.some(s => colJ.includes(s))
-
-                    const isInactive = 
-                        INACTIVE_STATUSES.some(s => colE.includes(s)) ||
-                        INACTIVE_STATUSES.some(s => colJ.includes(s))
-
-                    // Parse billing cycle day from contract start date
-                    const contractRaw = contractIdx >= 0 ? (row[contractIdx] || '').replace(/[}"]/g, '').trim() : ''
-                    let billingDay = null
-                    if (contractRaw) {
-                        // Formats: "30/07/2025" or "2025-05-30 18:03:09"
-                        if (contractRaw.includes('/')) {
-                            const parts = contractRaw.split('/')
-                            billingDay = parseInt(parts[0]) || null
-                        } else if (contractRaw.includes('-')) {
-                            const parts = contractRaw.split(/[-T\s]/)
-                            billingDay = parseInt(parts[2]) || null
-                        }
-                    }
-
-                    // Parse plan value
-                    const valorRaw = valorIdx >= 0 ? (row[valorIdx] || '').replace(/[}"]/g, '').trim() : ''
-                    const planValue = parseInt(valorRaw) || null
-
-                    // Extract subscriber code
-                    const codeRaw = codeIdx >= 0 ? (row[codeIdx] || '').replace(/[}"]/g, '').trim() : ''
-                    const code = codeRaw || null
-
-                    // Always update - last row is most recent (use code as key if available)
-                    const mapKey = code || cleanName.toLowerCase()
-                    const existing = subscriberMap.get(mapKey)
-                    subscriberMap.set(mapKey, {
-                        name: cleanName,
-                        code: code,
-                        plano: (row[planoIdx] || '').replace(/[}"]/g, '').trim(),
-                        phone: (row[phoneIdx] || '').replace(/[}"]/g, '').trim(),
-                        email: emailIdx !== -1 ? (row[emailIdx] || '').replace(/[}"]/g, '').trim() : '',
-                        status: isActive ? 'ativo' : (isInactive ? 'inativo' : 'inativo'),
-                        rawStatus: (row[statusIdx] || '').trim(),
-                        billingDay: billingDay || (existing?.billingDay) || null,
-                        planValue: planValue || (existing?.planValue) || null,
-                        contractDate: contractRaw
-                    })
-                }
-
-                // Process all subscribers
-                const all = Array.from(subscriberMap.values())
-                    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-
-                if (!cancelled) {
-                    setSubscribers(all)
-                    setError(null)
-                }
-            } catch (e) {
-                console.error('Erro ao buscar assinantes:', e)
-                if (!cancelled) setError(e.message)
-            } finally {
-                if (!cancelled) setLoading(false)
-            }
-        }
-
-        fetchSubscribers()
-
-        // Auto-refresh a cada 5 minutos
-        const interval = setInterval(fetchSubscribers, 5 * 60 * 1000)
-
-        return () => { cancelled = true; clearInterval(interval) }
+            }).filter(s => s.name)
+            setSubscribers(lista.sort((x, y) => x.name.localeCompare(y.name, 'pt-BR')))
+            setError(null)
+            setLoading(false)
+        }, err => {
+            console.error('assinantes:', err)
+            setError(err.message)
+            setLoading(false)
+        })
     }, [])
 
     return { subscribers, loading, error }

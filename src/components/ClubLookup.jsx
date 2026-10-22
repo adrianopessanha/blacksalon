@@ -3,7 +3,7 @@ import { Search, UserCheck, UserX, CreditCard, Phone, RefreshCw, X, ShieldCheck 
 import { useSubscribers } from '../hooks/useSubscribers'
 
 export function ClubLookup() {
-    const { subscribers, loading, error, refetch } = useSubscribers()
+    const { subscribers, loading, error } = useSubscribers()
     const [search, setSearch] = useState('')
 
     const filtered = useMemo(() => {
@@ -112,11 +112,6 @@ export function ClubLookup() {
                                 <div className="flex-1">
                                     <h3 className="text-lg font-bold text-white mb-1 leading-tight">{client.name}</h3>
                                     <div className="space-y-1">
-                                        {client.email && (
-                                            <div className="flex items-center gap-2 text-[13px] text-gray-400">
-                                                <span className="text-gray-600 font-medium">E-mail:</span> {client.email}
-                                            </div>
-                                        )}
                                         <div className="flex items-center gap-2 text-[13px] text-gray-400">
                                             <span className="text-gray-600 font-medium">{isAtivo ? 'Vencimento:' : 'Vencido em:'}</span>
                                             <span className={isAtivo ? 'text-emerald-400/80' : 'text-red-400/80'}>
@@ -150,7 +145,7 @@ export function ClubLookup() {
                             
                             {client.rawStatus && (
                                 <div className="mt-4 pt-3 border-t border-gray-800/50 flex justify-between items-center bg-gray-950/20 -mx-4 px-4 -mb-4 rounded-b-2xl py-2">
-                                    <span className="text-[10px] text-gray-600 uppercase tracking-widest font-medium">Status detalhado Celcoin</span>
+                                    <span className="text-[10px] text-gray-600 uppercase tracking-widest font-medium">{client.origem === 'balcao' ? 'Status (balcão)' : 'Status detalhado Celcoin'}</span>
                                     <span className={`text-[10px] font-bold ${isAtivo ? 'text-emerald-500/60' : 'text-red-500/60'}`}>
                                         {client.rawStatus}
                                     </span>

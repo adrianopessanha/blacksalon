@@ -62,6 +62,17 @@ service cloud.firestore {
       allow read, write: if isAuthorized();
     }
 
+    // Assinantes — ID = telefone. Sem CPF/e-mail: barbeiros leem.
+    // Barbeiro só cria/altera origem "balcao"; celcoin/abacatepay só admin (ou a função, que ignora regras).
+    match /assinantes/{telefone} {
+      allow read: if isAuthorized();
+      allow create: if isAdmin()
+        || (isAuthorized() && request.resource.data.origem == 'balcao');
+      allow update: if isAdmin()
+        || (isAuthorized() && resource.data.origem == 'balcao' && request.resource.data.origem == 'balcao');
+      allow delete: if isAdmin();
+    }
+
     // Pagamentos da Celcoin — ID = {telefone}_{transacao_id}. Tem CPF/e-mail: só admin.
     match /pagamentos_assinatura/{docId} {
       allow read, write: if isAdmin();

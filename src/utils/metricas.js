@@ -93,7 +93,7 @@ export function sumidos(clientes, assinantesPorTel, hoje) {
         const prevista = somaDias(c.ultimaVisita, Math.round(freq))
         const atraso = diasEntre(somaDias(prevista, TOLERANCIA_DIAS), hoje)
         if (atraso <= 0) continue
-        lista.push({ ...c, prevista, atraso, estimado, assinante: assinantesPorTel.get(c.telefone)?.assinante === true })
+        lista.push({ ...c, prevista, atraso, estimado, assinante: assinantesPorTel.get(c.telefone)?.status_assinatura === 'ativa' })
     }
     return lista.sort((a, b) => a.atraso - b.atraso)
 }

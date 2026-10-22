@@ -17,7 +17,7 @@ export function useMetricas() {
             const [comTel, doMes, assin, cancel] = await Promise.all([
                 getDocs(query(collection(db, 'lancamentos'), where('cliente_telefone', '!=', null))),
                 getDocs(query(collection(db, 'lancamentos'), where('data', '>=', Timestamp.fromDate(inicioMes)))),
-                getDocs(query(collection(db, 'clientes'), where('celcoin', '==', true))),
+                getDocs(collection(db, 'assinantes')),
                 getDocs(query(collection(db, 'pagamentos_assinatura'), where('tipo', '==', 'cancelada'))),
             ])
             setDados({

@@ -47,7 +47,7 @@ test('sumidos: frequência própria + 7 de tolerância; 1 visita usa 30 e marca 
         L('A', '2026-10-01T15:00:00Z'), L('A', '2026-10-11T15:00:00Z'), // freq 10 -> prevista 21/10, limite 28/10
         L('B', '2026-10-01T15:00:00Z'), // prevista 31/10, limite 07/11
     ])
-    const s = sumidos(clientes, new Map([['A', { assinante: true }]]), '2026-11-01')
+    const s = sumidos(clientes, new Map([['A', { status_assinatura: 'ativa' }]]), '2026-11-01')
     assert.equal(s.length, 1)
     assert.equal(s[0].telefone, 'A')
     assert.equal(s[0].atraso, 4)

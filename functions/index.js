@@ -4,7 +4,7 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { defineSecret } = require("firebase-functions/params");
 const { timingSafeEqual } = require("crypto");
 const { parseAgendamento } = require("./agendamento");
-const { parsePagamento, atualizacaoCliente, escolherCandidato } = require("./assinatura");
+const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato } = require("./assinatura");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
@@ -369,6 +369,10 @@ exports.registrarPagamentoAssinatura = onRequest(
                 }
                 if (!cliente.exists && p.nome) upd.nome = p.nome;
                 tx.set(clienteRef, { ...upd, atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
+                tx.set(db.collection("assinantes").doc(p.telefone), {
+                    ...atualizacaoAssinante(p),
+                    ultima_atualizacao: FieldValue.serverTimestamp(),
+                }, { merge: true });
 
                 return { duplicado: false, situacao, lancamento_id: lancamentoId };
             });

@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { parsePagamento, atualizacaoCliente, escolherCandidato, classificar, parseValor, parseData } = require("./assinatura");
+const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato, classificar, parseValor, parseData } = require("./assinatura");
 
 const base = {
     transacao_id: "98765",
@@ -82,4 +82,21 @@ test("escolha do lançamento: 7 dias, prefere valor igual, depois mais recente",
     assert.equal(escolherCandidato(c, 100, agora).id, "igualRecente");
     assert.equal(escolherCandidato(c, 140, agora).id, "outroValor");
     assert.equal(escolherCandidato([c[0]], 100, agora), null);
+});
+
+test("valor é sempre em reais e nunca é dividido", () => {
+    assert.equal(parsePagamento({ ...base, valor: "140", status: "x" }).valor, 140);
+    assert.equal(parsePagamento({ ...base, valor: "14000", status: "x" }).valor, 14000);
+    assert.equal(parsePagamento({ ...base, valor: 80, valor_centavos: "8000", status: "x" }).valor, 80);
+});
+
+test("assinantes: status por tipo de evento, origem celcoin, sem CPF/e-mail", () => {
+    const a = atualizacaoAssinante(parsePagamento({ ...base, status: "Capturada na Operadora" }));
+    assert.equal(a.status_assinatura, "ativa");
+    assert.equal(a.origem, "celcoin");
+    assert.equal(a.valor, 100);
+    assert.equal(a.email, undefined);
+    assert.equal(a.documento, undefined);
+    assert.equal(atualizacaoAssinante(parsePagamento({ ...base, status: "Estornada" })).status_assinatura, "inativa");
+    assert.equal(atualizacaoAssinante(parsePagamento({ ...base, status: "Negada na Operadora" })).status_assinatura, "pagamento_recusado");
 });

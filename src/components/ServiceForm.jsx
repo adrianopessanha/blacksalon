@@ -442,6 +442,41 @@ export function ServiceForm() {
                 alert(`Lançamento salvo para ${activeBarber.name}!`)
             }
 
+            // Assinante de balcão (sem cartão recorrente): registra/renova em assinantes/{telefone}
+            const tel55Venda = normalizeTelefone55(formData.cliente_telefone)
+            if (formData.tipo === 'venda_assinatura' && tel55Venda) {
+                const ref = doc(db, 'assinantes', tel55Venda)
+                const existente = await getDoc(ref)
+                const origemAtual = existente.exists() ? existente.data().origem : null
+                const hojeStr = todayStr
+                const venc = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate())
+                const vencStr = venc.getFullYear() + '-' + String(venc.getMonth() + 1).padStart(2, '0') + '-' + String(venc.getDate()).padStart(2, '0')
+                // Celcoin: só a função atualiza. Abacatepay: só admin renova, mantendo a origem.
+                if (origemAtual === 'abacatepay' && isAdmin) {
+                    await setDoc(ref, {
+                        status_assinatura: 'ativa',
+                        status_original: 'Paga fora do sistema',
+                        vencimento: vencStr,
+                        ultima_atualizacao: serverTimestamp(),
+                    }, { merge: true })
+                } else if (origemAtual && origemAtual !== 'balcao') {
+                    alert(`Lançamento salvo, mas o cadastro de assinante NÃO foi alterado: este cliente é assinante ${origemAtual}. Avise o Adriano.`)
+                } else {
+                await setDoc(ref, {
+                    nome: formData.cliente_nome.trim(),
+                    telefone: tel55Venda,
+                    plano: selectedPlan.label,
+                    valor: parseFloat(formData.valor_bruto),
+                    origem: 'balcao',
+                    status_assinatura: 'ativa',
+                    status_original: 'Paga fora do sistema',
+                    vencimento: vencStr,
+                    ultima_atualizacao: serverTimestamp(),
+                    ...(existente.exists() && existente.data().inicio_contrato ? {} : { inicio_contrato: hojeStr }),
+                }, { merge: true })
+                }
+            }
+
             // Webhook Make.com — notificar venda de assinatura
             if (formData.tipo === 'venda_assinatura') {
                 const now2 = new Date()
