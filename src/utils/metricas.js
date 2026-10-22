@@ -142,11 +142,23 @@ export function totalGasto(lancamentosComTelefone, pagamentosReceita) {
     return total
 }
 
+// "telefone|AAAA-MM-DD" de cada dia com lançamento de serviço do cliente
+export function diasComVisita(lancamentos) {
+    const s = new Set()
+    for (const l of lancamentos) {
+        const d = toDate(l.data)
+        if (d && ehVisita(l)) s.add(l.cliente_telefone + '|' + diaSP(d))
+    }
+    return s
+}
+
 // Falta = reserva de dia já passado (a partir de DADOS_DESDE) sem lançamento ligado a ela
-export function faltas(agendamentos, idsAtendidos, hoje) {
+// e sem lançamento de serviço do mesmo telefone no mesmo dia
+export function faltas(agendamentos, idsAtendidos, hoje, visitasDia = new Set()) {
     const porTel = new Map()
     for (const a of agendamentos) {
         if (!a.data || a.data < DADOS_DESDE || a.data >= hoje || idsAtendidos.has(a.id)) continue
+        if (visitasDia.has(a.telefone + '|' + a.data)) continue
         const lista = porTel.get(a.telefone) || []
         lista.push(a)
         porTel.set(a.telefone, lista)
@@ -173,6 +185,7 @@ export function porBarbeiro(lancamentosJanela, clientes, desde) {
         clientesAtendidos: b.clientes.size,
         voltaramComEle: [...b.clientes].filter(t => (porTel.get(t)?.visitasPorBarbeiro?.[b.barbeiro] || 0) >= 2).length,
         pctSemTelefone: b.servicos ? (b.semTelefone / b.servicos) * 100 : null,
+        semTelefone: b.semTelefone,
         servicos: b.servicos,
     })).sort((a, b) => b.clientesAtendidos - a.clientesAtendidos)
 }

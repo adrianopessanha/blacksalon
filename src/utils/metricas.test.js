@@ -118,3 +118,12 @@ test('por barbeiro: atendidos, voltaram com ele e % sem telefone', () => {
     assert.equal(j.voltaramComEle, 1)
     assert.equal(j.pctSemTelefone, 25)
 })
+
+import { diasComVisita } from './metricas.js'
+
+test('faltas: lançamento de serviço do mesmo telefone no mesmo dia conta como comparecida', () => {
+    const ag = [{ id: 'x1', telefone: 'A', data: '2026-10-22' }, { id: 'x2', telefone: 'A', data: '2026-10-23' }]
+    const visitas = diasComVisita([L('A', '2026-10-22T18:00:00Z'), L('A', '2026-10-23T18:00:00Z', { tipo: 'produto' })])
+    const f = faltas(ag, new Set(), '2026-10-25', visitas)
+    assert.deepEqual(f.get('A').map(a => a.id), ['x2'])
+})

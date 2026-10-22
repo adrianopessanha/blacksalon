@@ -5,7 +5,7 @@ import { formatTelefone, semAcento } from '../utils/phone'
 import {
     DADOS_DESDE, DIAS_MIN_SUMIDOS, diaSP, diasEntre, somaDias,
     montarClientes, painel, sumidos, canceladosRecentes, whatsappLink,
-    totalGasto, faltas, porBarbeiro, voltaPrevista,
+    totalGasto, faltas, diasComVisita, porBarbeiro, voltaPrevista,
 } from '../utils/metricas'
 
 const fmtBRL = (v) => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -28,7 +28,7 @@ export function MetricsDashboard() {
         const cancelamentos = dados.cancelamentos.map(c => ({ telefone: c.telefone, nome: c.nome, data: c.data }))
         const total = totalGasto(dados.lancamentosComTelefone, dados.pagamentosReceita)
         const idsAtendidos = new Set(dados.lancamentosComTelefone.map(l => l.agendamento_id).filter(Boolean))
-        const faltasPorTel = faltas(dados.agendamentos, idsAtendidos, hoje)
+        const faltasPorTel = faltas(dados.agendamentos, idsAtendidos, hoje, diasComVisita(dados.lancamentosComTelefone))
 
         // Nome mais confiável: lançamento > assinante > pagamento > agendamento
         const nomes = new Map()
@@ -50,7 +50,9 @@ export function MetricsDashboard() {
             cancelados: canceladosRecentes(cancelamentos, assinantesPorTel, hoje).map(e => ({ ...e, nome: nomes.get(e.telefone) || e.nome })),
             topValor: [...total.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([telefone, valor]) => ({ telefone, valor, nome: nomes.get(telefone) })),
             topVisitas: [...clientes].sort((a, b) => b.visitas - a.visitas).slice(0, 20),
-            barbeiros: porBarbeiro(dados.lancamentos30d, clientes, somaDias(hoje, -30)),
+            // Janela começa no mais recente entre 30 dias atrás e o início do registro de telefones
+            barbeirosDesde: [somaDias(hoje, -30), DADOS_DESDE].sort()[1],
+            barbeiros: porBarbeiro(dados.lancamentos30d, clientes, [somaDias(hoje, -30), DADOS_DESDE].sort()[1]),
         }
     }, [dados])
 
@@ -175,7 +177,7 @@ export function MetricsDashboard() {
 
                     <section className="bg-gray-900 border border-gray-800 rounded-2xl">
                         <h2 className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 text-sm font-semibold text-gray-200">
-                            <Scissors size={16} className="text-cyan-400" /> Por barbeiro (últimos 30 dias)
+                            <Scissors size={16} className="text-cyan-400" /> Por barbeiro (desde {fmtDia(calc.barbeirosDesde)})
                         </h2>
                         {calc.barbeiros.length === 0 ? <div className="px-4 py-4 text-sm text-gray-500">{INSUF}</div> : (
                             <div className="overflow-x-auto">
@@ -196,7 +198,7 @@ export function MetricsDashboard() {
                                                 <td className="px-2 py-2 text-right text-gray-200">{b.clientesAtendidos ? `${b.voltaramComEle} (${Math.round(b.voltaramComEle / b.clientesAtendidos * 100)}%)` : '—'}</td>
                                                 <td className={`px-4 py-2 text-right font-bold ${b.pctSemTelefone > 50 ? 'text-red-400' : b.pctSemTelefone > 20 ? 'text-yellow-400' : 'text-emerald-400'}`}>
                                                     {b.pctSemTelefone == null ? '—' : `${Math.round(b.pctSemTelefone)}%`}
-                                                    <span className="text-[10px] text-gray-500 font-normal"> de {b.servicos}</span>
+                                                    <span className="text-[10px] text-gray-500 font-normal"> ({b.semTelefone} de {b.servicos})</span>
                                                 </td>
                                             </tr>
                                         ))}
