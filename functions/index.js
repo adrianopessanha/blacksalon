@@ -6,6 +6,9 @@ const { timingSafeEqual } = require("crypto");
 const { parseAgendamento } = require("./agendamento");
 const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato } = require("./assinatura");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onTaskDispatched } = require("firebase-functions/v2/tasks");
+const { getFunctions } = require("firebase-admin/functions");
+const { motivoParaNaoEnviar, pesquisaRecente, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
 // Deve bater com o campo webhookSecret que o Make envia no corpo JSON
@@ -418,5 +421,91 @@ exports.vincularRenovacaoCelcoin = onDocumentCreated(
                 lancamento_id: lancRef.id,
             });
         });
+    }
+);
+
+// ==========================================
+// Pesquisa de satisfação: 1h depois do lançamento do atendimento
+// ==========================================
+const PESQUISA_SECRET = defineSecret("PESQUISA_WEBHOOK_SECRET");
+const PESQUISA_URL = "https://hook.us1.make.com/1dcpfjyqxsj3vnehi7a3n23mvybsjrw4";
+
+exports.agendarPesquisaSatisfacao = onDocumentCreated(
+    { document: "lancamentos/{id}", region: "southamerica-east1" },
+    async (event) => {
+        const lanc = event.data?.data();
+        const agora = Date.now();
+        const motivo = motivoParaNaoEnviar(lanc, agora);
+        if (motivo) return;
+
+        const cliente = await db.collection("clientes").doc(lanc.cliente_telefone).get();
+        if (pesquisaRecente(cliente.data(), agora)) return;
+
+        const fila = getFunctions().taskQueue("locations/southamerica-east1/functions/enviarPesquisaSatisfacao");
+        try {
+            await fila.enqueue(
+                { lancamentoId: event.params.id, telefone: lanc.cliente_telefone },
+                { scheduleDelaySeconds: 3600, id: idTarefa(lanc.cliente_telefone, new Date(agora)) }
+            );
+        } catch (err) {
+            // Mesmo cliente no mesmo dia (ex.: atendimento dividido em 2 lançamentos): já existe task
+            if (err?.code === "functions/task-already-exists") return;
+            throw err;
+        }
+    }
+);
+
+exports.enviarPesquisaSatisfacao = onTaskDispatched(
+    {
+        region: "southamerica-east1",
+        retryConfig: { maxAttempts: 3, minBackoffSeconds: 60 },
+        rateLimits: { maxConcurrentDispatches: 5 },
+        secrets: [PESQUISA_SECRET],
+    },
+    async (req) => {
+        const { lancamentoId, telefone } = req.data || {};
+        if (!lancamentoId || !telefone) return;
+
+        const lancRef = db.collection("lancamentos").doc(lancamentoId);
+        const clienteRef = db.collection("clientes").doc(telefone);
+
+        // Reserva o envio para não mandar duas pesquisas ao mesmo cliente ao mesmo tempo
+        const lanc = await db.runTransaction(async (tx) => {
+            const [l, c] = await Promise.all([tx.get(lancRef), tx.get(clienteRef)]);
+            if (!l.exists || l.data().cliente_telefone !== telefone) return null;
+            if (l.data().pesquisaEnviadaEm) return null;
+            const agora = Date.now();
+            if (pesquisaRecente(c.data(), agora) || reservadaPorOutro(c.data(), lancamentoId, agora)) return null;
+            tx.set(clienteRef, { pesquisaReservadaEm: Timestamp.now(), pesquisaReservadaPor: lancamentoId }, { merge: true });
+            return l.data();
+        });
+        if (!lanc) return;
+
+        let resp;
+        try {
+            resp = await fetch(PESQUISA_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-pesquisa-secret": PESQUISA_SECRET.value() },
+                body: JSON.stringify(montarPayload(lancamentoId, lanc)),
+            });
+        } catch (err) {
+            resp = null;
+            console.error("pesquisa: falha de rede", err);
+        }
+
+        if (!resp || !resp.ok) {
+            await clienteRef.set({ pesquisaReservadaEm: FieldValue.delete(), pesquisaReservadaPor: FieldValue.delete() }, { merge: true });
+            // Erro faz o Cloud Tasks tentar de novo (até 3 tentativas no total)
+            throw new Error(`Make respondeu ${resp ? resp.status : "sem resposta"}`);
+        }
+
+        const batch = db.batch();
+        batch.set(clienteRef, {
+            ultimaPesquisaEm: FieldValue.serverTimestamp(),
+            pesquisaReservadaEm: FieldValue.delete(),
+            pesquisaReservadaPor: FieldValue.delete(),
+        }, { merge: true });
+        batch.update(lancRef, { pesquisaEnviadaEm: FieldValue.serverTimestamp() });
+        await batch.commit();
     }
 );
