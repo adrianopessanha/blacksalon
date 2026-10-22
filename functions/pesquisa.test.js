@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { motivoParaNaoEnviar, pesquisaRecente, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
+const { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
 
 const agora = Date.parse("2026-10-22T15:00:00Z");
 const ts = (iso) => ({ toMillis: () => Date.parse(iso), toDate: () => new Date(iso) });
@@ -18,10 +18,11 @@ test("não agenda: telefone inválido, venda/renovação de assinatura, vale, pr
     assert.equal(motivoParaNaoEnviar({ ...base, data: ts("2026-10-20T14:00:00Z") }, agora), "lançamento retroativo");
 });
 
-test("regra dos 30 dias", () => {
-    assert.equal(pesquisaRecente({ ultimaPesquisaEm: ts("2026-10-01T12:00:00Z") }, agora), true);
-    assert.equal(pesquisaRecente({ ultimaPesquisaEm: ts("2026-09-01T12:00:00Z") }, agora), false);
-    assert.equal(pesquisaRecente(undefined, agora), false);
+test("1 por dia: bloqueia só se já recebeu hoje (fuso SP); ontem não bloqueia", () => {
+    assert.equal(pesquisaHoje({ ultimaPesquisaEm: ts("2026-10-22T13:00:00Z") }, agora), true);
+    assert.equal(pesquisaHoje({ ultimaPesquisaEm: ts("2026-10-21T20:00:00Z") }, agora), false);
+    assert.equal(pesquisaHoje({ ultimaPesquisaEm: ts("2026-10-22T02:00:00Z") }, agora), false); // 21/10 23h em SP
+    assert.equal(pesquisaHoje(undefined, agora), false);
 });
 
 test("reserva: outra task do mesmo cliente enviando agora bloqueia; a própria não", () => {

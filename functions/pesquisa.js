@@ -1,4 +1,3 @@
-const TRINTA_DIAS_MS = 30 * 24 * 60 * 60 * 1000;
 const UM_DIA_MS = 24 * 60 * 60 * 1000;
 const RESERVA_MS = 15 * 60 * 1000;
 
@@ -19,9 +18,10 @@ function motivoParaNaoEnviar(lanc, agoraMs) {
     return null;
 }
 
-function pesquisaRecente(cliente, agoraMs) {
+// 1 pesquisa por cliente por dia (fuso SP); ultimaPesquisaEm não bloqueia além do próprio dia
+function pesquisaHoje(cliente, agoraMs) {
     const ultima = ms(cliente?.ultimaPesquisaEm);
-    return ultima != null && agoraMs - ultima < TRINTA_DIAS_MS;
+    return ultima != null && dataHoraSP(new Date(ultima)).slice(0, 10) === dataHoraSP(new Date(agoraMs)).slice(0, 10);
 }
 
 // Outra task do mesmo cliente está enviando agora (ex.: lançamento dividido em 2)
@@ -62,4 +62,4 @@ function idTarefa(telefone, date) {
     return `pesquisa-${telefone}-${dataHoraSP(date).slice(0, 10).replace(/-/g, "")}`;
 }
 
-module.exports = { motivoParaNaoEnviar, pesquisaRecente, reservadaPorOutro, montarPayload, dataHoraSP, idTarefa, TELEFONE_RE };
+module.exports = { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, dataHoraSP, idTarefa, TELEFONE_RE };

@@ -8,7 +8,7 @@ const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandid
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onTaskDispatched } = require("firebase-functions/v2/tasks");
 const { getFunctions } = require("firebase-admin/functions");
-const { motivoParaNaoEnviar, pesquisaRecente, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
+const { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
 // Deve bater com o campo webhookSecret que o Make envia no corpo JSON
@@ -438,9 +438,6 @@ exports.agendarPesquisaSatisfacao = onDocumentCreated(
         const motivo = motivoParaNaoEnviar(lanc, agora);
         if (motivo) return;
 
-        const cliente = await db.collection("clientes").doc(lanc.cliente_telefone).get();
-        if (pesquisaRecente(cliente.data(), agora)) return;
-
         const fila = getFunctions().taskQueue("locations/southamerica-east1/functions/enviarPesquisaSatisfacao");
         try {
             await fila.enqueue(
@@ -475,7 +472,7 @@ exports.enviarPesquisaSatisfacao = onTaskDispatched(
             if (!l.exists || l.data().cliente_telefone !== telefone) return null;
             if (l.data().pesquisaEnviadaEm) return null;
             const agora = Date.now();
-            if (pesquisaRecente(c.data(), agora) || reservadaPorOutro(c.data(), lancamentoId, agora)) return null;
+            if (pesquisaHoje(c.data(), agora) || reservadaPorOutro(c.data(), lancamentoId, agora)) return null;
             tx.set(clienteRef, { pesquisaReservadaEm: Timestamp.now(), pesquisaReservadaPor: lancamentoId }, { merge: true });
             return l.data();
         });
