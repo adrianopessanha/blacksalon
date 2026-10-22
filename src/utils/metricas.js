@@ -41,9 +41,11 @@ export function montarClientes(lancamentos) {
         const d = toDate(l.data)
         if (!d) continue
         const dia = diaSP(d)
-        const c = porTel.get(l.cliente_telefone) || { telefone: l.cliente_telefone, dias: new Map() }
+        const c = porTel.get(l.cliente_telefone) || { telefone: l.cliente_telefone, dias: new Map(), visitasBarbeiro: new Set(), servicos: {} }
         const atual = c.dias.get(dia)
         if (!atual || d > atual.data) c.dias.set(dia, { data: d, nome: l.cliente_nome, barbeiro: l.barbeiro_nome })
+        if (l.barbeiro_nome) c.visitasBarbeiro.add(dia + '|' + l.barbeiro_nome)
+        for (const s of String(l.servico_descricao || '').split(' + ').map(x => x.trim()).filter(Boolean)) c.servicos[s] = (c.servicos[s] || 0) + 1
         porTel.set(l.cliente_telefone, c)
     }
     const clientes = []
@@ -51,7 +53,12 @@ export function montarClientes(lancamentos) {
         const dias = [...c.dias.keys()].sort()
         const ultimo = c.dias.get(dias[dias.length - 1])
         const intervalos = dias.slice(1).map((d, i) => diasEntre(dias[i], d))
+        const porBarbeiro = {}
+        for (const k of c.visitasBarbeiro) { const b = k.split('|')[1]; porBarbeiro[b] = (porBarbeiro[b] || 0) + 1 }
         clientes.push({
+            visitasPorBarbeiro: porBarbeiro,
+            barbeiroPreferido: Object.entries(porBarbeiro).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+            servicosMaisFeitos: Object.entries(c.servicos).sort((a, b) => b[1] - a[1]).slice(0, 5),
             telefone: c.telefone,
             nome: ultimo.nome && ultimo.nome !== 'Não Informado' ? ultimo.nome : null,
             barbeiro: ultimo.barbeiro || null,
@@ -116,4 +123,62 @@ export function canceladosRecentes(cancelamentos, assinantesPorTel, hoje) {
 export function whatsappLink(tel55) {
     const d = String(tel55 || '').replace(/\D/g, '')
     return d ? `https://wa.me/${d}` : null
+}
+
+const VENDA_ASSINATURA = ['venda_assinatura', 'renovacao_celcoin']
+const PAGAMENTO_REAL = ['Dinheiro', 'Pix', 'Crédito', 'Débito']
+
+// Total gasto por telefone: serviços pagos na hora + venda/renovação de assinatura no balcão
+// + cartão aprovado da Celcoin (pagamentos_assinatura com receita)
+export function totalGasto(lancamentosComTelefone, pagamentosReceita) {
+    const total = new Map()
+    const soma = (tel, v) => { if (tel && v) total.set(tel, (total.get(tel) || 0) + v) }
+    for (const l of lancamentosComTelefone) {
+        const v = parseFloat(l.valor_bruto) || 0
+        if (ehTicket(l) && ehVisita(l)) soma(l.cliente_telefone, v)
+        else if (VENDA_ASSINATURA.includes(l.tipo) && PAGAMENTO_REAL.includes(l.forma_pagamento)) soma(l.cliente_telefone, v)
+    }
+    for (const p of pagamentosReceita) soma(p.telefone, parseFloat(p.valor) || 0)
+    return total
+}
+
+// Falta = reserva de dia já passado (a partir de DADOS_DESDE) sem lançamento ligado a ela
+export function faltas(agendamentos, idsAtendidos, hoje) {
+    const porTel = new Map()
+    for (const a of agendamentos) {
+        if (!a.data || a.data < DADOS_DESDE || a.data >= hoje || idsAtendidos.has(a.id)) continue
+        const lista = porTel.get(a.telefone) || []
+        lista.push(a)
+        porTel.set(a.telefone, lista)
+    }
+    return porTel
+}
+
+// Por barbeiro na janela [desde, hoje]: clientes atendidos, quantos têm 2+ visitas com ele
+// (em todo o histórico) e % de lançamentos de serviço sem telefone
+export function porBarbeiro(lancamentosJanela, clientes, desde) {
+    const res = {}
+    const get = (nome) => (res[nome] ||= { barbeiro: nome, servicos: 0, semTelefone: 0, clientes: new Set() })
+    for (const l of lancamentosJanela) {
+        const d = toDate(l.data)
+        if (!d || diaSP(d) < desde || !(l.tipo === 'servico' || !l.tipo) || !l.barbeiro_nome) continue
+        const b = get(l.barbeiro_nome)
+        b.servicos++
+        if (!l.cliente_telefone) b.semTelefone++
+        else b.clientes.add(l.cliente_telefone)
+    }
+    const porTel = new Map(clientes.map(c => [c.telefone, c]))
+    return Object.values(res).map(b => ({
+        barbeiro: b.barbeiro,
+        clientesAtendidos: b.clientes.size,
+        voltaramComEle: [...b.clientes].filter(t => (porTel.get(t)?.visitasPorBarbeiro?.[b.barbeiro] || 0) >= 2).length,
+        pctSemTelefone: b.servicos ? (b.semTelefone / b.servicos) * 100 : null,
+        servicos: b.servicos,
+    })).sort((a, b) => b.clientesAtendidos - a.clientesAtendidos)
+}
+
+export function voltaPrevista(c) {
+    if (!c) return null
+    const estimado = c.visitas < 2
+    return { dia: somaDias(c.ultimaVisita, Math.round(estimado ? FREQ_PADRAO_DIAS : c.frequencia)), estimado }
 }
