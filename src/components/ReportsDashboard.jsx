@@ -651,8 +651,14 @@ export function ReportsDashboard() {
                     >
                         <option value="all">Todos</option>
                         {BARBERS
-                            .filter(b => filters.storeId === 'all' || b.store === filters.storeId)
+                            .filter(b => !b.inactive && (filters.storeId === 'all' || b.store === filters.storeId))
                             .map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        {/* Inativos só para consultar períodos em que trabalharam */}
+                        <optgroup label="Inativos (histórico)">
+                            {BARBERS
+                                .filter(b => b.inactive && (filters.storeId === 'all' || b.store === filters.storeId))
+                                .map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        </optgroup>
                     </select>
                 </div>
                 <button onClick={fetchReports} className="bg-cyan-600 hover:bg-cyan-500 text-white p-2 rounded-lg transition-all shadow-lg active:scale-95 flex items-center gap-2 text-sm font-medium px-3 sm:px-4 h-[38px] flex-1 sm:flex-initial justify-center">
@@ -951,7 +957,7 @@ export function ReportsDashboard() {
                                         value={editItem.barbeiro_id}
                                         onChange={e => setEditItem({ ...editItem, barbeiro_id: e.target.value })}
                                     >
-                                        {BARBERS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                        {BARBERS.filter(b => !b.inactive || b.id === editItem.barbeiro_id).map(b => <option key={b.id} value={b.id}>{b.name}{b.inactive ? ' (inativo)' : ''}</option>)}
                                     </select>
                                 </div>
 

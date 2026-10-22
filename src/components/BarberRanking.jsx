@@ -21,7 +21,7 @@ export function BarberRanking({ currentBarberId }) {
         const barberRevenueMap = {}
         
         // Initialize all barbers with 0
-        BARBERS.forEach(barber => {
+        BARBERS.filter(b => !b.inactive).forEach(barber => {
             barberRevenueMap[barber.id] = {
                 id: barber.id,
                 name: barber.name,

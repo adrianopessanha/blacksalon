@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Users, UserPlus, Repeat, DollarSign, ShieldCheck, RefreshCw, MessageCircle, AlertTriangle, UserX, Info, Search, Trophy, Scissors, X } from 'lucide-react'
 import { useMetricas } from '../hooks/useMetricas'
+import { BARBERS } from '../data/barbers'
 import { formatTelefone, semAcento } from '../utils/phone'
 import {
     DADOS_DESDE, DIAS_MIN_SUMIDOS, diaSP, diasEntre, somaDias,
@@ -52,7 +53,8 @@ export function MetricsDashboard() {
             topVisitas: [...clientes].sort((a, b) => b.visitas - a.visitas).slice(0, 20),
             // Janela começa no mais recente entre 30 dias atrás e o início do registro de telefones
             barbeirosDesde: [somaDias(hoje, -30), DADOS_DESDE].sort()[1],
-            barbeiros: porBarbeiro(dados.lancamentos30d, clientes, [somaDias(hoje, -30), DADOS_DESDE].sort()[1]),
+            barbeiros: porBarbeiro(dados.lancamentos30d, clientes, [somaDias(hoje, -30), DADOS_DESDE].sort()[1])
+                .filter(b => BARBERS.some(x => !x.inactive && x.name === b.barbeiro)),
         }
     }, [dados])
 
