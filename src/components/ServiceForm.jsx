@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { db, collection, addDoc, serverTimestamp, auth, signOut, query, where, getDocs, doc, setDoc, deleteDoc, updateDoc } from '../firebase'
-import { Timestamp } from 'firebase/firestore'
+import { Timestamp, getDoc } from 'firebase/firestore'
 import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronLeft, ChevronRight, Search, UserCheck, AlertTriangle, Phone, CreditCard, Trash2, Pencil, X } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
 import { BarberDailyView } from './BarberDailyView'
@@ -72,6 +72,20 @@ export function ServiceForm() {
     const [showVoucherDropdown, setShowVoucherDropdown] = useState(false)
     const [selectedPlan, setSelectedPlan] = useState(null)
     const [agendamentoSel, setAgendamentoSel] = useState(null)
+    const [clienteInfo, setClienteInfo] = useState(null)
+    const isRenovacao = formData.tipo === 'renovacao_celcoin'
+    const isAssinVenda = formData.tipo === 'venda_assinatura' || isRenovacao
+
+    // Status da assinatura (gravado pela Celcoin em clientes/{telefone})
+    const tel55Cliente = normalizeTelefone55(formData.cliente_telefone)
+    useEffect(() => {
+        if (!tel55Cliente) { setClienteInfo(null); return }
+        let cancelado = false
+        getDoc(doc(db, 'clientes', tel55Cliente))
+            .then(snap => { if (!cancelado) setClienteInfo(snap.exists() ? snap.data() : null) })
+            .catch(err => console.error('clientes:', err))
+        return () => { cancelado = true }
+    }, [tel55Cliente])
 
     const [splitPayment, setSplitPayment] = useState(false)
     const [splitForma2, setSplitForma2] = useState('Crédito')
@@ -245,6 +259,9 @@ export function ServiceForm() {
         if (needsSubscriber && !formData.cliente_nome) {
             return alert('Selecione o assinante da lista para lançar com pagamento Assinante.')
         }
+        if (needsSubscriber && clienteInfo?.status_assinatura === 'cancelada') {
+            return alert('Assinatura CANCELADA: cobrar como avulso.')
+        }
         if (needsSubscriber && subscribers.length > 0) {
             const match = subscribers.find(s => s.name.toLowerCase() === formData.cliente_nome.toLowerCase())
             if (!match) {
@@ -256,15 +273,19 @@ export function ServiceForm() {
         }
 
         const PAGAMENTOS_REAIS = ['Dinheiro', 'Pix', 'Crédito', 'Débito']
-        if (['venda_vale', 'venda_assinatura'].includes(formData.tipo) && !PAGAMENTOS_REAIS.includes(formData.forma_pagamento)) {
+        if (['venda_vale', 'venda_assinatura', 'renovacao_celcoin'].includes(formData.tipo) && !PAGAMENTOS_REAIS.includes(formData.forma_pagamento)) {
             return alert('Venda de Assinatura ou Vale Presente só pode ser feita com pagamento real (Dinheiro, Pix, Crédito ou Débito).')
         }
 
-        if (formData.tipo === 'venda_assinatura' && (!formData.cliente_nome || !formData.cliente_telefone)) {
+        if (isAssinVenda && (!formData.cliente_nome || !formData.cliente_telefone)) {
             return alert('Para venda de Assinatura, Nome e Telefone do cliente são obrigatórios.')
         }
 
-        if (formData.tipo === 'venda_assinatura' && !selectedPlan) {
+        if (isRenovacao && !normalizeTelefone55(formData.cliente_telefone)) {
+            return alert('Telefone inválido. Selecione o cliente pela lista ou informe DDD + número.')
+        }
+
+        if (isAssinVenda && !selectedPlan) {
             return alert('Selecione o plano da assinatura.')
         }
 
@@ -336,7 +357,8 @@ export function ServiceForm() {
                 agendamento_id: agendamentoSel?.agendamento_id || null,
                 barbeiro_agendado: agendamentoSel?.barbeiro_agendado || null,
                 subscriber_code: formData.subscriber_code || null,
-                created_at: serverTimestamp()
+                created_at: serverTimestamp(),
+                ...(isRenovacao ? { plano: selectedPlan.label, status_celcoin: 'pendente' } : {})
             }
 
             // Detectar mix plano + avulso
@@ -595,13 +617,13 @@ export function ServiceForm() {
                                 )}
                             </div>
                             {/* Se é uso de vale, venda de vale ou venda de assinatura, mostrar descrição travada */}
-                            {(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) || formData.tipo === 'venda_vale' || formData.tipo === 'venda_assinatura' ? (
-                                <div className={`${formData.tipo === 'venda_assinatura' ? 'bg-purple-950/20 border-purple-700/50' : formData.tipo === 'venda_vale' ? 'bg-cyan-950/20 border-cyan-700/50' : 'bg-pink-950/20 border-pink-700/50'} border rounded-lg px-4 py-3`}>
-                                    <div className={`text-xs font-bold uppercase tracking-wider mb-1 ${formData.tipo === 'venda_assinatura' ? 'text-purple-400' : formData.tipo === 'venda_vale' ? 'text-cyan-400' : 'text-pink-400'}`}>
-                                        {formData.tipo === 'venda_assinatura' ? 'Venda de Assinatura' : formData.tipo === 'venda_vale' ? 'Venda de Pacote Vale Presente' : 'Serviço do Vale Presente'}
+                            {(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) || formData.tipo === 'venda_vale' || isAssinVenda ? (
+                                <div className={`${isAssinVenda ? 'bg-purple-950/20 border-purple-700/50' : formData.tipo === 'venda_vale' ? 'bg-cyan-950/20 border-cyan-700/50' : 'bg-pink-950/20 border-pink-700/50'} border rounded-lg px-4 py-3`}>
+                                    <div className={`text-xs font-bold uppercase tracking-wider mb-1 ${isAssinVenda ? 'text-purple-400' : formData.tipo === 'venda_vale' ? 'text-cyan-400' : 'text-pink-400'}`}>
+                                        {isRenovacao ? 'Renovação de assinante Celcoin' : formData.tipo === 'venda_assinatura' ? 'Venda de Assinatura' : formData.tipo === 'venda_vale' ? 'Venda de Pacote Vale Presente' : 'Serviço do Vale Presente'}
                                     </div>
                                     <div className="text-sm text-gray-200">
-                                        {formData.servico_descricao || (formData.tipo === 'venda_assinatura' ? 'Venda de assinatura' : formData.tipo === 'venda_vale' ? 'Compra de pacote' : 'Uso Vale Presente')}
+                                        {formData.servico_descricao || (isRenovacao ? 'Renovação assinatura Celcoin' : formData.tipo === 'venda_assinatura' ? 'Venda de assinatura' : formData.tipo === 'venda_vale' ? 'Compra de pacote' : 'Uso Vale Presente')}
                                     </div>
                                 </div>
                             ) : (
@@ -648,7 +670,7 @@ export function ServiceForm() {
                         </div>
 
                         {/* Custom description (only when "Outro" selected and NOT vale usage) */}
-                        {showCustomDesc && !(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) && formData.tipo !== 'venda_vale' && formData.tipo !== 'venda_assinatura' && (
+                        {showCustomDesc && !(formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso) && formData.tipo !== 'venda_vale' && !isAssinVenda && (
                             <input
                                 placeholder="Descreva o servico..."
                                 className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 px-4 text-gray-200 outline-none focus:border-cyan-500"
@@ -689,11 +711,11 @@ export function ServiceForm() {
                                                 setSelectedPresets([])
                                                 setShowCustomDesc(false)
                                                 setFormData({ ...formData, tipo: newTipo, servico_descricao: 'Compra de pacote' })
-                                            } else if (newTipo === 'venda_assinatura') {
+                                            } else if (newTipo === 'venda_assinatura' || newTipo === 'renovacao_celcoin') {
                                                 setSelectedPresets([])
                                                 setShowCustomDesc(false)
                                                 setSelectedPlan(null)
-                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: 'Venda de assinatura', valor_bruto: '' })
+                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: newTipo === 'renovacao_celcoin' ? 'Renovação assinatura Celcoin' : 'Venda de assinatura', valor_bruto: '' })
                                             } else {
                                                 setSelectedPlan(null)
                                                 setFormData({ ...formData, tipo: newTipo, servico_descricao: newTipo === 'servico' ? '' : formData.servico_descricao })
@@ -705,12 +727,13 @@ export function ServiceForm() {
                                         <option value="produto">Produto</option>
                                         <option value="venda_vale">Venda Vale Presente</option>
                                         <option value="venda_assinatura">Venda Assinatura</option>
+                                        <option value="renovacao_celcoin">Renovação assinante Celcoin</option>
                                     </select>
                                 </div>
                             </div>
 
                             {/* Captura de Telefone (para Venda de Vale e Venda de Assinatura) */}
-                            {(formData.tipo === 'venda_vale' || formData.tipo === 'venda_assinatura') && (
+                            {(formData.tipo === 'venda_vale' || isAssinVenda) && (
                                 <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
                                     <label className="block text-xs text-cyan-400 font-bold uppercase tracking-wider">Telefone do Cliente (Obrigatório)</label>
                                     <div className="relative">
@@ -726,7 +749,7 @@ export function ServiceForm() {
                             )}
 
                             {/* Seleção de Plano (apenas para Venda de Assinatura) */}
-                            {formData.tipo === 'venda_assinatura' && (
+                            {isAssinVenda && (
                                 <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
                                     <label className="block text-xs text-purple-400 font-bold uppercase tracking-wider">Plano</label>
                                     <div className="grid grid-cols-2 gap-2">
@@ -736,7 +759,7 @@ export function ServiceForm() {
                                                 type="button"
                                                 onClick={() => {
                                                     setSelectedPlan(plan)
-                                                    setFormData({ ...formData, valor_bruto: plan.value.toString(), servico_descricao: `Venda de assinatura - ${plan.label}` })
+                                                    setFormData({ ...formData, valor_bruto: plan.value.toString(), servico_descricao: `${isRenovacao ? 'Renovação assinatura Celcoin' : 'Venda de assinatura'} - ${plan.label}` })
                                                 }}
                                                 className={`py-3 px-3 rounded-lg text-sm font-bold transition-all active:scale-95 ${selectedPlan?.id === plan.id
                                                     ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/30 ring-1 ring-purple-400/30'
@@ -778,7 +801,7 @@ export function ServiceForm() {
                                                     <UserCheck size={16} className="text-purple-400" />
                                                     <span className="text-purple-300 text-sm font-medium flex-1">{formData.cliente_nome}</span>
                                                     <button type="button"
-                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '', subscriber_code: '' }); setSubscriberSearch('') }}
+                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '', cliente_telefone: '', subscriber_code: '' }); setSubscriberSearch('') }}
                                                         className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
                                                     >trocar</button>
                                                 </div>
@@ -804,7 +827,7 @@ export function ServiceForm() {
                                                                 filtered.slice(0, 20).map((sub, i) => (
                                                                     <button type="button" key={i}
                                                                         onClick={() => {
-                                                                            setFormData({ ...formData, cliente_nome: sub.name, subscriber_code: sub.code || '' })
+                                                                            setFormData({ ...formData, cliente_nome: sub.name, cliente_telefone: sub.phone || '', subscriber_code: sub.code || '' })
                                                                             setSubscriberSearch('')
                                                                             setShowSubscriberDropdown(false)
                                                                         }}
@@ -922,6 +945,22 @@ export function ServiceForm() {
                                 )
                             })()}
 
+                            {clienteInfo?.status_assinatura === 'cancelada' && (
+                                <div className="text-sm font-bold text-red-200 bg-red-900/50 border border-red-700 rounded-lg px-3 py-2">
+                                    Assinatura CANCELADA: cobrar como avulso
+                                </div>
+                            )}
+                            {clienteInfo?.status_assinatura === 'pagamento_recusado' && (
+                                <div className="text-sm font-bold text-yellow-200 bg-yellow-900/40 border border-yellow-700 rounded-lg px-3 py-2">
+                                    Pagamento da assinatura recusado: falar com o Adriano antes de atender como assinante
+                                </div>
+                            )}
+                            {formData.tipo === 'venda_assinatura' && clienteInfo?.celcoin && (
+                                <div className="text-sm font-bold text-purple-200 bg-purple-900/40 border border-purple-700 rounded-lg px-3 py-2">
+                                    Cliente da Celcoin: use Renovação assinante Celcoin
+                                </div>
+                            )}
+
                             {/* Payment Buttons */}
                             <div>
                                 <label className="block text-xs text-gray-500 mb-2 uppercase tracking-wider font-semibold">Pagamento</label>
@@ -941,7 +980,7 @@ export function ServiceForm() {
                                                 {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
                                                     const noPlano = planos.length === 0
                                                     const isVendaVale = formData.tipo === 'venda_vale'
-                                                    const isVendaAssinatura = formData.tipo === 'venda_assinatura'
+                                                    const isVendaAssinatura = isAssinVenda
                                                     const isVendaEspecial = isVendaVale || isVendaAssinatura
                                                     const disabled = (onlyPlano && pm !== 'Assinante') || (isMixed && (pm === 'Assinante' || pm === 'Vale Presente')) || (noPlano && pm === 'Assinante') || (isVendaEspecial && (pm === 'Vale Presente' || pm === 'Assinante'))
                                                     return (

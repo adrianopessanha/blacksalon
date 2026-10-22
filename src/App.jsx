@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { auth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from './firebase'
-import { LogOut, Scissors, BarChart3, Wallet, Download, CreditCard, TrendingUp, ShieldCheck, Award } from 'lucide-react'
+import { LogOut, Scissors, BarChart3, Wallet, Download, CreditCard, TrendingUp, ShieldCheck, Award, ClipboardCheck } from 'lucide-react'
 
 import { ServiceForm } from './components/ServiceForm'
 import { ReportsDashboard } from './components/ReportsDashboard'
@@ -12,6 +12,7 @@ import { DebugData } from './components/DebugData'
 import { MetricsDashboard } from './components/MetricsDashboard'
 import { ClubLookup } from './components/ClubLookup'
 import { GiftVoucherMonitor } from './components/GiftVoucherMonitor'
+import { CelcoinPendencias, usePendenciasCelcoin } from './components/CelcoinPendencias'
 
 import { BARBERS } from './data/barbers'
 
@@ -86,6 +87,7 @@ function App() {
               <Link to="/financeiro" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><Wallet size={18} /> <span className="hidden md:inline">Financeiro</span></Link>
               <Link to="/assinaturas" className="flex items-center gap-2 text-sm font-medium hover:text-purple-400"><CreditCard size={18} /> <span className="hidden md:inline">Assinaturas</span></Link>
               <Link to="/vales" className="flex items-center gap-2 text-sm font-medium hover:text-pink-400"><Award size={18} /> <span className="hidden md:inline">Vales</span></Link>
+              <CelcoinNavLink />
               <Link to="/metricas" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><TrendingUp size={18} /> <span className="hidden md:inline">Métricas</span></Link>
               <Link to="/fechamento" className="flex items-center gap-2 text-sm font-medium hover:text-cyan-400"><LogOut size={18} /> <span className="hidden md:inline">Fechamento</span></Link>
               <Link to="/debug" className="flex items-center gap-2 text-sm font-medium text-red-500 hover:text-red-400 border border-red-900/50 px-2 rounded"><span className="hidden md:inline">Reparo (Debug)</span></Link>
@@ -112,6 +114,7 @@ function App() {
               <Route path="/financeiro" element={<FinancialDashboard />} />
               <Route path="/assinaturas" element={<SubscriptionMonitor />} />
               <Route path="/vales" element={<GiftVoucherMonitor />} />
+              <Route path="/baixas-celcoin" element={<CelcoinPendencias />} />
               <Route path="/metricas" element={<MetricsDashboard />} />
               <Route path="/debug" element={<DebugData />} />
             </>
@@ -121,6 +124,16 @@ function App() {
         </Routes>
       </main>
     </div>
+  )
+}
+
+function CelcoinNavLink() {
+  const { total } = usePendenciasCelcoin()
+  return (
+    <Link to="/baixas-celcoin" className="relative flex items-center gap-2 text-sm font-medium hover:text-yellow-400">
+      <ClipboardCheck size={18} /> <span className="hidden md:inline">Baixas Celcoin</span>
+      {total > 0 && <span className="absolute -top-2 -right-2 bg-yellow-500 text-black text-[10px] font-bold rounded-full min-w-[1.1rem] h-[1.1rem] px-1 flex items-center justify-center">{total}</span>}
+    </Link>
   )
 }
 

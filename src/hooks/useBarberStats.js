@@ -70,7 +70,7 @@ export function useBarberStats(barberId, targetDateStr) {
                     const cycleStartDate = lastClosureDate || startOfMonth
 
                     // Vendas de pacote (assinatura/vale) são receita da loja, não do barbeiro
-                    const isSalePackage = ['venda_assinatura', 'venda_vale'].includes(data.tipo)
+                    const isSalePackage = ['venda_assinatura', 'renovacao_celcoin', 'venda_vale'].includes(data.tipo)
 
                     // Monthly production (for goal)
                     if (date >= startOfMonth) {
@@ -108,7 +108,7 @@ export function useBarberStats(barberId, targetDateStr) {
                     // Selected day stats
                     if (date >= startOfTargetDay && date <= endOfTargetDay) {
                         const isNonRevenue = ['Assinante', 'Vale Presente', 'venda_assinatura', 'venda_vale'].includes(data.forma_pagamento) ||
-                            ['venda_assinatura', 'venda_vale', 'adiantamento', 'fechamento_comissao'].includes(data.tipo)
+                            ['venda_assinatura', 'renovacao_celcoin', 'venda_vale', 'adiantamento', 'fechamento_comissao'].includes(data.tipo)
 
                         if (data.tipo !== 'adiantamento' && data.tipo !== 'fechamento_comissao' && !isSalePackage) {
                             tCount++

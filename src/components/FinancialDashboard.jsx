@@ -45,6 +45,11 @@ const STATUS_OPTIONS = [
     { id: 'provisionado', label: 'Provisionado', color: 'blue' }
 ]
 
+// A partir deste mês a receita de cartão da Celcoin vem de pagamentos_assinatura
+// (webhook), e não é mais digitada à mão em receita_celcoin.
+const CELCOIN_AUTO_DESDE = '2026-11'
+const UNIDADE_PARA_LOJA = { '01': 'loja01', '02': 'loja02' }
+
 // Helpers de classificação (mesma lógica do ReportsDashboard)
 const isFinancial = (item) => ['adiantamento', 'fechamento_comissao'].includes(item.tipo)
 const isNonCashRevenue = (item) => ['Assinante', 'Vale Presente'].includes(item.forma_pagamento)
@@ -61,6 +66,7 @@ export function FinancialDashboard() {
     const [revenueData, setRevenueData] = useState([])
     const [financialData, setFinancialData] = useState([])
     const [movementsData, setMovementsData] = useState([])
+    const [celcoinData, setCelcoinData] = useState([])
     const [activeTab, setActiveTab] = useState('consolidado')
     const [processing, setProcessing] = useState(false)
     const [deleteId, setDeleteId] = useState(null)
@@ -131,8 +137,24 @@ export function FinancialDashboard() {
             setMovementsData(docs.sort((a, b) => (b.date || '').localeCompare(a.date || '')))
         })
 
-        return () => { unsubRevenue(); unsubFinance(); unsubMovements() }
+        // 4. Cartão aprovado da Celcoin (automático a partir do corte)
+        let unsubCelcoin = () => {}
+        if (month >= CELCOIN_AUTO_DESDE) {
+            const celcoinQ = query(collection(db, 'pagamentos_assinatura'), where('receita', '==', true))
+            unsubCelcoin = onSnapshot(celcoinQ, (snapshot) => {
+                setCelcoinData(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => String(d.data || '').startsWith(month)))
+            }, (err) => console.error('Celcoin error:', err))
+        } else {
+            setCelcoinData([])
+        }
+
+        return () => { unsubRevenue(); unsubFinance(); unsubMovements(); unsubCelcoin() }
     }, [month])
+
+    // Receita de cartão Celcoin por loja (sem unidade conhecida = global, como no financeiro manual)
+    const celcoinAuto = (storeFilter) => celcoinData
+        .filter(d => storeFilter === 'consolidado' || (UNIDADE_PARA_LOJA[d.unidade] || 'global') === storeFilter || !UNIDADE_PARA_LOJA[d.unidade])
+        .reduce((s, d) => s + (parseFloat(d.valor) || 0), 0)
 
     // ==========================================
     // DRE CALCULATIONS
@@ -164,11 +186,11 @@ export function FinancialDashboard() {
                 .filter(d => d.tipo === 'servico' || !d.tipo)
                 .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
             const vendaAssinaturaLoja = revenueItems
-                .filter(d => d.tipo === 'venda_assinatura')
+                .filter(d => d.tipo === 'venda_assinatura' || d.tipo === 'renovacao_celcoin')
                 .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
             const vendaCelcoin = storeFinance
                 .filter(d => d.finance_category === 'receita_celcoin' && d.status !== 'provisionado')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
+                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0) + celcoinAuto(storeFilter)
             const vendaAssinaturas = vendaAssinaturaLoja + vendaCelcoin
             const vendaVale = revenueItems
                 .filter(d => d.tipo === 'venda_vale')
@@ -269,7 +291,8 @@ export function FinancialDashboard() {
             loja02: calcStore('loja02'),
             consolidado: calcStore('consolidado')
         }
-    }, [revenueData, financialData])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [revenueData, financialData, celcoinData])
 
     // Fluxo de Caixa
     const cashFlow = useMemo(() => {
@@ -309,7 +332,7 @@ export function FinancialDashboard() {
                 : financialData.filter(d => d.store_id === storeFilter || d.store_id === 'global')
             const celcoinPago = storeFinance
                 .filter(d => d.finance_category === 'receita_celcoin' && d.status === 'pago')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
+                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0) + celcoinAuto(storeFilter)
 
             const totalEntradas = dinheiro + pix + debito + credito + celcoinPago
 
@@ -349,7 +372,8 @@ export function FinancialDashboard() {
             loja02: calcCash('loja02'),
             consolidado: calcCash('consolidado')
         }
-    }, [revenueData, financialData])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [revenueData, financialData, celcoinData])
 
     // Capital stats
     const capitalStats = useMemo(() => {

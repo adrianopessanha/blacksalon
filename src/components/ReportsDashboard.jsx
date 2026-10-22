@@ -36,7 +36,10 @@ const isFinancial = (item) =>
 
 // Vendas de pacote (assinatura/vale) - receita da LOJA, não do barbeiro
 const isSalePackage = (item) =>
-    ['venda_assinatura', 'venda_vale'].includes(item.tipo)
+    ['venda_assinatura', 'renovacao_celcoin', 'venda_vale'].includes(item.tipo)
+
+// Venda de assinatura no balcão: sem cartão recorrente ou renovação de assinante Celcoin
+const isSubscriptionSale = (item) => ['venda_assinatura', 'renovacao_celcoin'].includes(item.tipo)
 
 // Serviços que NÃO geram receita na hora (Assinante/Vale Presente - uso)
 const isNonCashRevenue = (item) =>
@@ -212,7 +215,7 @@ export function ReportsDashboard() {
 
         // === RECEITAS DA LOJA POR CATEGORIA ===
         // Vendas de assinatura
-        const subscriptionSales = storeRevenueItems.filter(d => d.tipo === 'venda_assinatura')
+        const subscriptionSales = storeRevenueItems.filter(isSubscriptionSale)
         const subscriptionSalesTotal = subscriptionSales.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
         // Vendas de vale presente
         const voucherSales = storeRevenueItems.filter(d => d.tipo === 'venda_vale')
@@ -306,7 +309,7 @@ export function ReportsDashboard() {
 
         // Subscription metrics
         const subData = data.filter(d => d.forma_pagamento === 'Assinante')
-        const internalSubSales = data.filter(d => d.tipo === 'venda_assinatura')
+        const internalSubSales = data.filter(isSubscriptionSale)
         const internalRevenue = internalSubSales.reduce((sum, i) => sum + (parseFloat(i.valor_bruto) || 0), 0)
         const subCommissionCost = subData.reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
 
@@ -329,7 +332,7 @@ export function ReportsDashboard() {
             if (isStoreRevenue(d)) {
                 byStore[store].gross += parseFloat(d.valor_bruto) || 0
                 const val = parseFloat(d.valor_bruto) || 0
-                if (d.tipo === 'venda_assinatura') {
+                if (isSubscriptionSale(d)) {
                     byStore[store].subscriptionSales += val
                     byStore[store].subscriptionSalesCount++
                 } else if (d.tipo === 'venda_vale') {
@@ -504,7 +507,7 @@ export function ReportsDashboard() {
         const EVENT_TYPE_MAP = {
             'servico': 'servico', 'Servico': 'servico', 'serviço': 'servico',
             'produto': 'produto', 'Produto': 'produto',
-            'venda_assinatura': 'venda_assinatura', 'uso_assinatura': 'uso_assinatura',
+            'venda_assinatura': 'venda_assinatura', 'renovacao_celcoin': 'venda_assinatura', 'uso_assinatura': 'uso_assinatura',
             'venda_vale': 'venda_vale', 'uso_vale': 'uso_vale',
             'adiantamento': 'adiantamento', 'Adiantamento': 'adiantamento',
             'pagamento': 'pagamento', 'Pagamento': 'pagamento',

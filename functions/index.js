@@ -4,6 +4,8 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { defineSecret } = require("firebase-functions/params");
 const { timingSafeEqual } = require("crypto");
 const { parseAgendamento } = require("./agendamento");
+const { parsePagamento, atualizacaoCliente, escolherCandidato } = require("./assinatura");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
 // Deve bater com o webhookSecret enviado pelo site de vale presente
@@ -275,5 +277,142 @@ exports.registrarAgendamento = onRequest(
             console.error("registrarAgendamento:", error);
             return res.status(500).json({ error: "Internal server error" });
         }
+    }
+);
+
+// ==========================================
+// Pagamentos de assinatura da Celcoin enviados pelo Make
+// POST /registrarPagamentoAssinatura  (header x-make-secret)
+// ==========================================
+const tsMs = (v) => (v && typeof v.toMillis === "function" ? v.toMillis() : null);
+
+exports.registrarPagamentoAssinatura = onRequest(
+    {
+        region: "southamerica-east1",
+        maxInstances: 10,
+        invoker: "public",
+        secrets: [MAKE_SECRET],
+    },
+    async (req, res) => {
+        if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+        if (!segredoConfere(req.get("x-make-secret"), MAKE_SECRET.value())) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const p = parsePagamento(req.body);
+        if (!p.ok) return res.status(422).json({ error: "Dados insuficientes", motivos: p.erros });
+
+        try {
+            const pagRef = db.collection("pagamentos_assinatura").doc(p.id);
+            const clienteRef = db.collection("clientes").doc(p.telefone);
+
+            const resultado = await db.runTransaction(async (tx) => {
+                const existente = await tx.get(pagRef);
+                if (existente.exists) return { duplicado: true, situacao: existente.data().situacao };
+
+                const cliente = await tx.get(clienteRef);
+                let situacao = "registrado";
+                let lancamentoId = null;
+
+                if (p.classe === "baixa_manual") {
+                    const pendentes = await tx.get(db.collection("lancamentos")
+                        .where("cliente_telefone", "==", p.telefone)
+                        .where("tipo", "==", "renovacao_celcoin")
+                        .where("status_celcoin", "==", "pendente"));
+                    const escolhido = escolherCandidato(
+                        pendentes.docs.map((d) => ({ id: d.id, valor: d.data().valor_bruto, dataMs: tsMs(d.data().data) })),
+                        p.valor,
+                        Date.now()
+                    );
+                    if (escolhido) {
+                        lancamentoId = escolhido.id;
+                        situacao = "vinculado";
+                        tx.update(db.collection("lancamentos").doc(escolhido.id), {
+                            status_celcoin: "baixado",
+                            transacao_id: p.transacaoId,
+                            pagamento_assinatura_id: p.id,
+                            codigo_cliente: p.codigoCliente,
+                            email: p.email,
+                            documento: p.documento,
+                        });
+                    } else {
+                        situacao = "baixa_sem_lancamento";
+                    }
+                } else if (p.classe === "cartao_aprovado") {
+                    situacao = "receita_celcoin";
+                }
+
+                tx.set(pagRef, {
+                    transacao_id: p.transacaoId,
+                    telefone: p.telefone,
+                    nome: p.nome,
+                    valor: p.valor,
+                    plano: p.plano,
+                    status_celcoin: p.status,
+                    pago_fora: p.pagoFora,
+                    tipo: p.classe,
+                    receita: p.classe === "cartao_aprovado",
+                    situacao,
+                    lancamento_id: lancamentoId,
+                    unidade: cliente.exists ? (cliente.data().unidade || null) : null,
+                    codigo_cliente: p.codigoCliente,
+                    email: p.email,
+                    documento: p.documento,
+                    data_pagamento: p.dataPagamento ? Timestamp.fromDate(p.dataPagamento) : FieldValue.serverTimestamp(),
+                    data: p.dataStr,
+                    recebido_em: FieldValue.serverTimestamp(),
+                });
+
+                const upd = atualizacaoCliente(p);
+                if (upd.ultimo_pagamento_assinatura instanceof Date) {
+                    upd.ultimo_pagamento_assinatura = Timestamp.fromDate(upd.ultimo_pagamento_assinatura);
+                }
+                if (!cliente.exists && p.nome) upd.nome = p.nome;
+                tx.set(clienteRef, { ...upd, atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
+
+                return { duplicado: false, situacao, lancamento_id: lancamentoId };
+            });
+
+            return res.status(200).json({ success: true, id: p.id, tipo: p.classe, ...resultado });
+        } catch (error) {
+            console.error("registrarPagamentoAssinatura:", error);
+            return res.status(500).json({ error: "Internal server error" });
+        }
+    }
+);
+
+// Renovação lançada DEPOIS da baixa: liga à baixa sem lançamento do mesmo telefone
+exports.vincularRenovacaoCelcoin = onDocumentCreated(
+    { document: "lancamentos/{id}", region: "southamerica-east1" },
+    async (event) => {
+        const lanc = event.data?.data();
+        if (!lanc || lanc.tipo !== "renovacao_celcoin" || lanc.status_celcoin !== "pendente" || !lanc.cliente_telefone) return;
+        const lancRef = event.data.ref;
+
+        await db.runTransaction(async (tx) => {
+            const atual = await tx.get(lancRef);
+            if (!atual.exists || atual.data().status_celcoin !== "pendente") return;
+            const baixas = await tx.get(db.collection("pagamentos_assinatura")
+                .where("telefone", "==", lanc.cliente_telefone)
+                .where("situacao", "==", "baixa_sem_lancamento"));
+            const escolhido = escolherCandidato(
+                baixas.docs.map((d) => ({ id: d.id, valor: d.data().valor, dataMs: tsMs(d.data().data_pagamento), dados: d.data() })),
+                lanc.valor_bruto,
+                tsMs(lanc.data) || Date.now()
+            );
+            if (!escolhido) return;
+            tx.update(lancRef, {
+                status_celcoin: "baixado",
+                transacao_id: escolhido.dados.transacao_id,
+                pagamento_assinatura_id: escolhido.id,
+                codigo_cliente: escolhido.dados.codigo_cliente || null,
+                email: escolhido.dados.email || null,
+                documento: escolhido.dados.documento || null,
+            });
+            tx.update(db.collection("pagamentos_assinatura").doc(escolhido.id), {
+                situacao: "vinculado",
+                lancamento_id: lancRef.id,
+            });
+        });
     }
 );
