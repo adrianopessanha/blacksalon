@@ -8,8 +8,8 @@ const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandid
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
-// Deve bater com o webhookSecret enviado pelo site de vale presente
-const VALE_WEBHOOK_SECRET = defineSecret("VALE_WEBHOOK_SECRET");
+// Deve bater com o campo webhookSecret que o Make envia no corpo JSON
+const VALE_WEBHOOK_SECRET_NOVO = defineSecret("VALE_WEBHOOK_SECRET_NOVO");
 
 initializeApp();
 const db = getFirestore();
@@ -33,7 +33,7 @@ exports.webhookValePresente = onRequest(
         region: "southamerica-east1",
         maxInstances: 10,
         invoker: "public",
-        secrets: [VALE_WEBHOOK_SECRET],
+        secrets: [VALE_WEBHOOK_SECRET_NOVO],
     },
     async (req, res) => {
         // Apenas POST
@@ -45,7 +45,7 @@ exports.webhookValePresente = onRequest(
             const payload = req.body;
 
             // 1. Validar webhook secret
-            if (!segredoConfere(payload?.webhookSecret, VALE_WEBHOOK_SECRET.value())) {
+            if (!segredoConfere(payload?.webhookSecret, VALE_WEBHOOK_SECRET_NOVO.value())) {
                 console.error("Webhook secret inválido");
                 return res.status(401).json({ error: "Unauthorized - invalid webhook secret" });
             }
