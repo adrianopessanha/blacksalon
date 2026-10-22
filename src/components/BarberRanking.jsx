@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { db, collection, query, where, onSnapshot, orderBy } from '../firebase'
+import { db, collection, query, where, onSnapshot } from '../firebase'
+import { Timestamp } from 'firebase/firestore'
 import { Trophy, Medal, Award, TrendingUp, Crown } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
 
@@ -30,10 +31,10 @@ export function BarberRanking({ currentBarberId }) {
             }
         })
 
-        // Query all lancamentos from the start of month
+        // Só o mês atual: o cálculo abaixo já ignorava lançamentos anteriores
         const q = query(
             collection(db, 'lancamentos'),
-            orderBy('data', 'desc')
+            where('data', '>=', Timestamp.fromDate(startOfMonth))
         )
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
