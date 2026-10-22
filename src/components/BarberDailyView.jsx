@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { db, collection, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from '../firebase'
+import { db, collection, addDoc, serverTimestamp, deleteDoc, doc, updateDoc, query, where, orderBy, limit, getDocs } from '../firebase'
+import { Timestamp } from 'firebase/firestore'
+import { ultimoSabadoFim, saldoAte } from '../utils/fechamento'
 import { DollarSign, TrendingUp, Clock, Wallet, CheckCircle, Trash2, MessageCircle, ShoppingBag, Users, Sparkles, Pencil, Target, Scissors, X } from 'lucide-react'
 
 export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, stats, statsLoading, dynamicGoal, isViewingPast = false }) {
@@ -13,6 +15,9 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
     const [editingLaunch, setEditingLaunch] = useState(null)
     const [editForm, setEditForm] = useState({})
     const [closeCommissionConfirmation, setCloseCommissionConfirmation] = useState(false)
+    // Fora do sábado: { limite: Date, valor: number } do fechamento só até o último sábado
+    const [fechamentoSabado, setFechamentoSabado] = useState(null)
+    const [modoFechamento, setModoFechamento] = useState('sabado') // sabado | tudo
     const [editingGoal, setEditingGoal] = useState(false)
     const [goalInput, setGoalInput] = useState('')
 
@@ -90,22 +95,41 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
         }
     }
 
-    const handleCloseCommission = () => {
+    const handleCloseCommission = async () => {
         if (stats.monthCommission <= 0) return alert("Não há saldo positivo para fechar.")
+        const limite = ultimoSabadoFim()
+        setFechamentoSabado(null)
+        setModoFechamento('tudo')
+        if (limite) {
+            setProcessing(true)
+            try {
+                const snap = await getDocs(query(collection(db, 'lancamentos'), where('barbeiro_id', '==', barberId), orderBy('data', 'desc'), limit(300)))
+                const valor = saldoAte(snap.docs.map(d => d.data()), limite)
+                setFechamentoSabado({ limite, valor })
+                if (valor > 0) setModoFechamento('sabado')
+            } catch (e) {
+                console.error('saldo até sábado:', e)
+            } finally {
+                setProcessing(false)
+            }
+        }
         setCloseCommissionConfirmation(true)
     }
 
     const executeCommissionClosure = async () => {
         setProcessing(true)
         try {
+            const ateSabado = modoFechamento === 'sabado' && fechamentoSabado?.valor > 0
             await addDoc(collection(db, 'lancamentos'), {
-                data: serverTimestamp(),
+                // Até sábado: o fechamento fica no sábado 23:59 e a data real em data_original
+                data: ateSabado ? Timestamp.fromDate(fechamentoSabado.limite) : serverTimestamp(),
+                ...(ateSabado ? { data_original: serverTimestamp() } : {}),
                 barbeiro_id: barberId,
                 barbeiro_nome: barberName || 'Barbeiro',
                 servico_descricao: 'Fechamento de Comissão',
                 valor_bruto: 0,
                 forma_pagamento: 'Pagamento',
-                comissao_barbeiro: -Math.abs(stats.monthCommission),
+                comissao_barbeiro: -Math.abs(ateSabado ? fechamentoSabado.valor : stats.monthCommission),
                 tipo: 'fechamento_comissao',
                 created_at: serverTimestamp()
             })
@@ -649,9 +673,32 @@ export function BarberDailyView({ barberId, barberName, isAdmin, selectedDate, s
                             <div className="bg-green-900/20 p-3 rounded-full"><CheckCircle size={24} /></div>
                             <h3 className="text-lg font-bold">Fechar Comissão</h3>
                         </div>
-                        <p className="text-gray-400 text-sm mb-6">
-                            Confirmar recebimento de <span className="text-white font-bold">{fmt(stats.monthCommission)}</span> e zerar o saldo?
-                        </p>
+                        {fechamentoSabado ? (
+                            <div className="space-y-2 mb-6">
+                                <p className="text-gray-400 text-xs">Hoje não é sábado. O que está sendo pago?</p>
+                                <label className={`flex items-start gap-2 p-3 rounded-xl border cursor-pointer ${modoFechamento === 'sabado' ? 'border-green-600 bg-green-950/30' : 'border-gray-800'} ${fechamentoSabado.valor <= 0 ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                                    <input type="radio" className="mt-1 accent-green-500" disabled={fechamentoSabado.valor <= 0}
+                                        checked={modoFechamento === 'sabado'} onChange={() => setModoFechamento('sabado')} />
+                                    <span className="text-sm text-gray-200">
+                                        Semana até sábado {fechamentoSabado.limite.toLocaleDateString('pt-BR')}: <b className="text-white">{fmt(fechamentoSabado.valor)}</b>
+                                        <span className="block text-[11px] text-gray-500">
+                                            {fechamentoSabado.valor > 0 ? 'O que entrou depois do sábado fica para a próxima semana.' : 'Essa semana já está fechada.'}
+                                        </span>
+                                    </span>
+                                </label>
+                                <label className={`flex items-start gap-2 p-3 rounded-xl border cursor-pointer ${modoFechamento === 'tudo' ? 'border-green-600 bg-green-950/30' : 'border-gray-800'}`}>
+                                    <input type="radio" className="mt-1 accent-green-500" checked={modoFechamento === 'tudo'} onChange={() => setModoFechamento('tudo')} />
+                                    <span className="text-sm text-gray-200">
+                                        Tudo até agora: <b className="text-white">{fmt(stats.monthCommission)}</b>
+                                        <span className="block text-[11px] text-gray-500">Zera o saldo inteiro, inclusive os dias depois do sábado.</span>
+                                    </span>
+                                </label>
+                            </div>
+                        ) : (
+                            <p className="text-gray-400 text-sm mb-6">
+                                Confirmar recebimento de <span className="text-white font-bold">{fmt(stats.monthCommission)}</span> e zerar o saldo?
+                            </p>
+                        )}
                         <div className="flex gap-3">
                             <button onClick={() => setCloseCommissionConfirmation(false)}
                                 className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium py-2.5 rounded-xl">Cancelar</button>
