@@ -3,6 +3,7 @@ import { db, collection, query, where, getDocs, deleteDoc, doc, updateDoc } from
 import { Timestamp } from 'firebase/firestore'
 import { Filter, Calendar, User, DollarSign, RefreshCw, Copy, Trash2, Pencil, Download, TrendingUp, TrendingDown, Scissors, CreditCard, Banknote, Smartphone, Award, BarChart3, Clock, Star, Store, Users, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { BARBERS, STORES } from '../data/barbers'
+import { RelatorioGeral } from './RelatorioGeral'
 
 // =============================================
 // UTILITY FUNCTIONS
@@ -88,71 +89,6 @@ export function ReportsDashboard() {
     const [deleteId, setDeleteId] = useState(null)
     const [editItem, setEditItem] = useState(null)
     const [expandedDays, setExpandedDays] = useState({})
-
-    // Managerial Data (Current Month)
-    const [managerialStats, setManagerialStats] = useState(null)
-
-    // Assinaturas
-    const [manualSubscriptionRevenue, setManualSubscriptionRevenue] = useState('')
-
-    // 1. Fetch Managerial Data (Independent of filters)
-    useEffect(() => {
-        const fetchManagerial = async () => {
-            try {
-                const now = new Date()
-                const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-                startOfMonth.setHours(0, 0, 0, 0)
-
-                const q = query(
-                    collection(db, 'lancamentos'),
-                    where('data', '>=', Timestamp.fromDate(startOfMonth))
-                )
-
-                const snapshot = await getDocs(q)
-                const raw = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
-
-                const todayStr = new Date().toLocaleDateString('pt-BR')
-
-                const calculateStats = (items) => {
-                    const stats = { dinheiro: 0, pix: 0, debito: 0, credito: 0, total: 0 }
-                    items.forEach(i => {
-                        const pm = i.forma_pagamento?.toLowerCase() || ''
-                        const tp = i.tipo?.toLowerCase() || ''
-                        const val = parseFloat(i.valor_bruto) || 0
-
-                        if (pm.includes('assinante') || pm.includes('vale presente') ||
-                            tp.includes('adiantamento') || tp.includes('fechamento')) return
-
-                        if (pm.includes('dinheiro')) stats.dinheiro += val
-                        else if (pm.includes('pix')) stats.pix += val
-                        else if (pm.includes('débito') || pm.includes('debito')) stats.debito += val
-                        else if (pm.includes('crédito') || pm.includes('credito')) stats.credito += val
-                        stats.total += val
-                    })
-                    return stats
-                }
-
-                const getStore = (d) => {
-                    const barber = BARBERS.find(b => b.id === d.barbeiro_id)
-                    return barber?.store || d.loja_id || 'unknown'
-                }
-
-                const loja01Month = raw.filter(d => getStore(d) === 'loja-01')
-                const loja02Month = raw.filter(d => getStore(d) === 'loja-02')
-                const loja01Today = loja01Month.filter(d => d.data && new Date(d.data.seconds * 1000).toLocaleDateString('pt-BR') === todayStr)
-                const loja02Today = loja02Month.filter(d => d.data && new Date(d.data.seconds * 1000).toLocaleDateString('pt-BR') === todayStr)
-
-                setManagerialStats({
-                    loja01: { today: calculateStats(loja01Today), month: calculateStats(loja01Month) },
-                    loja02: { today: calculateStats(loja02Today), month: calculateStats(loja02Month) }
-                })
-            } catch (e) {
-                console.error("Error fetching managerial stats:", e)
-                setPageError(e.message)
-            }
-        }
-        fetchManagerial()
-    }, [])
 
     // 2. Fetch Reports (Dependent on filters)
     const fetchReports = async () => {
@@ -252,9 +188,9 @@ export function ReportsDashboard() {
         // Total geral para percentuais (inclui tudo)
         const paymentTotal = services.reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
 
-        // Service breakdown (todos os lançamentos reais)
+        // Top serviços: só atendimentos (sem venda de assinatura, vale presente e produto)
         const byService = {}
-        services.forEach(d => {
+        services.filter(d => d.tipo === 'servico' || !d.tipo).forEach(d => {
             const svc = d.servico_descricao || 'Não especificado'
             if (!byService[svc]) byService[svc] = { count: 0, total: 0, commission: 0 }
             byService[svc].count++
@@ -608,8 +544,6 @@ export function ReportsDashboard() {
 
     if (pageError) return <div className="p-8 text-red-500 font-bold">Erro crítico: {pageError}</div>
 
-    const totalSubRevenue = (parseFloat(manualSubscriptionRevenue || 0) + (analytics?.internalRevenue || 0))
-    const subProfit = totalSubRevenue - (analytics?.subCommissionCost || 0)
 
     return (
         <div className="space-y-6 pb-20">
@@ -719,113 +653,15 @@ export function ReportsDashboard() {
             {/* === VIEW: ALL (no specific filter) === */}
             {!isBarberFilter && !isStoreFilter && (
                 <>
-                    {/* Managerial Summary */}
-                    {managerialStats && (
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-6 border-b border-gray-800">
-                            <StoreManagerCard label="Loja 01" stats={managerialStats.loja01} color="cyan" />
-                            <StoreManagerCard label="Loja 02" stats={managerialStats.loja02} color="purple" />
-                        </div>
-                    )}
-
-                    {/* General Metrics */}
                     {analytics && (
                         <>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-                                <MetricCard label="Faturamento Loja" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
-                                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="orange" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
-                                <MetricCard label="Resultado Líquido" value={fmt(analytics.gross - analytics.commission)} icon={Banknote} color="emerald" />
-                                <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
-                                <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
-                            </div>
-
-                            {/* === VENDAS DA LOJA (4 categorias) === */}
-                            <StoreSalesCards analytics={analytics} />
-
-                            {/* Store Comparison */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {Object.entries(analytics.byStore).map(([storeId, s]) => {
-                                    const storeName = STORES.find(st => st.id === storeId)?.name || storeId
-                                    const color = storeId === 'loja-01' ? 'cyan' : 'purple'
-                                    return (
-                                        <div key={storeId} className="bg-gray-900 border border-gray-800 p-5 rounded-2xl shadow-lg">
-                                            <div className="flex justify-between items-start mb-3">
-                                                <h3 className={`text-gray-300 font-semibold flex items-center gap-2`}>
-                                                    <Store size={18} className={`text-${color}-500`} /> {storeName}
-                                                </h3>
-                                                <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded-full">{s.count} atend.</span>
-                                            </div>
-                                            <div className="text-2xl font-bold text-gray-100">{fmt(s.gross)}</div>
-                                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-                                                {s.subscriptionSalesCount > 0 && (
-                                                    <span className="text-xs text-purple-400">Assinaturas: {fmt(s.subscriptionSales)} ({s.subscriptionSalesCount})</span>
-                                                )}
-                                                {s.voucherSalesCount > 0 && (
-                                                    <span className="text-xs text-pink-400">Vales: {fmt(s.voucherSales)} ({s.voucherSalesCount})</span>
-                                                )}
-                                                {s.productSalesCount > 0 && (
-                                                    <span className="text-xs text-amber-400">Produtos: {fmt(s.productSales)} ({s.productSalesCount})</span>
-                                                )}
-                                            </div>
-                                            <div className="text-xs text-gray-500 mt-1">Ticket Médio: {fmt(avg(s.ticketGross, s.ticketCount))}</div>
-                                            <div className="text-xs text-gray-500 mt-0.5">Comissões: {fmt(s.commission)}</div>
-                                            <div className="text-[10px] text-gray-600 mt-0.5">Receita: {fmt(s.commissionRevenue)} | Assin/Vale: {fmt(s.commissionNonCash)}</div>
-                                        </div>
-                                    )
-                                })}
-                            </div>
-
-                            {/* All Barbers Breakdown */}
-                            <AllBarbersCard byBarber={analytics.byBarber} />
-
-                            {/* Payment Breakdown */}
-                            <PaymentBreakdown byPayment={analytics.byPayment} total={analytics.paymentTotal} />
-
-                            {/* Top Services */}
+                            <RelatorioGeral data={data} filters={filters} />
                             <TopServicesCard topServices={analytics.topServices} />
                         </>
                     )}
                 </>
             )}
 
-            {/* ============ SUBSCRIPTION SECTION ============ */}
-            {analytics && analytics.subCount > 0 && (
-                <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-lg">
-                    <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center gap-2">
-                        <span className="bg-purple-900/40 text-purple-400 p-1.5 rounded-lg"><Star size={20} /></span> Monitoramento de Assinaturas
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
-                        <div>
-                            <label className="block text-xs text-gray-400 mb-1">Receita Plataforma Externa (Celcoin)</label>
-                            <div className="relative">
-                                <DollarSign className="absolute left-3 top-3 text-gray-500" size={18} />
-                                <input type="number" step="0.01"
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 pl-10 pr-4 text-gray-200 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/50"
-                                    placeholder="0,00" value={manualSubscriptionRevenue}
-                                    onChange={e => setManualSubscriptionRevenue(e.target.value)}
-                                />
-                            </div>
-                            <div className="mt-2 text-xs text-gray-500 flex justify-between">
-                                <span>Vendas Balcão:</span>
-                                <span className="text-gray-300 font-medium">{fmt(analytics.internalRevenue)}</span>
-                            </div>
-                        </div>
-                        <div className="flex flex-col sm:flex-row gap-4 sm:col-span-2">
-                            <div className="bg-gray-950 p-3 rounded-xl border border-gray-800 flex-1">
-                                <div className="text-xs text-gray-500 mb-1">Atendimentos</div>
-                                <div className="text-xl font-bold text-gray-200">{analytics.subCount}</div>
-                            </div>
-                            <div className="bg-gray-950 p-3 rounded-xl border border-gray-800 flex-1">
-                                <div className="text-xs text-gray-500 mb-1">Custo Comissões</div>
-                                <div className="text-xl font-bold text-red-400">- {fmt(analytics.subCommissionCost)}</div>
-                            </div>
-                            <div className={`p-3 rounded-xl border flex-1 ${subProfit >= 0 ? 'bg-green-900/20 border-green-900/50' : 'bg-red-900/20 border-red-900/50'}`}>
-                                <div className={`text-xs mb-1 ${subProfit >= 0 ? 'text-green-500' : 'text-red-500'}`}>Lucro Assinaturas</div>
-                                <div className={`text-xl font-bold ${subProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmt(subProfit)}</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* ============ DAILY TIMELINE ============ */}
             {analytics && Object.keys(analytics.byDay).length > 0 && (
@@ -876,7 +712,7 @@ export function ReportsDashboard() {
                                                         </td>
                                                         <td className="px-3 py-2.5 text-sm">{item.barbeiro_nome}</td>
                                                         <td className="px-3 py-2.5 text-sm text-gray-400">{item.cliente_nome || '-'}</td>
-                                                        <td className="px-3 py-2.5 text-sm">{item.servico_descricao}</td>
+                                                        <td className="px-3 py-2.5 text-sm">{item.tipo === 'adiantamento' ? 'Adiantamento' : item.servico_descricao}</td>
                                                         <td className="px-3 py-2.5 text-sm text-right">{fmt(parseFloat(item.valor_bruto))}</td>
                                                         <td className="px-3 py-2.5 text-sm text-right text-gray-500">{isFinancial(item) ? '-' : fmt(parseFloat(item.comissao_barbeiro))}</td>
                                                         <td className="px-3 py-2.5 text-right">
@@ -1091,8 +927,7 @@ function BarberDetailView({ barber, analytics, data }) {
             {/* Personal Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                 <MetricCard label="Faturamento" value={fmt(barberData.gross)} icon={DollarSign} color="cyan" />
-                <MetricCard label="Comissão (Total)" value={fmt(barberData.commission)} icon={Award} color="orange" sub={`Receita: ${fmt(barberData.commissionRevenue)} | Assin/Vale: ${fmt(barberData.commissionNonCash)}`} />
-                <MetricCard label="Resultado Líquido" value={fmt(barberData.gross - barberData.commission)} icon={Banknote} color="emerald" />
+                <MetricCard label="Comissão (Total)" value={fmt(barberData.commission)} icon={Award} color="orange" sub={`Receita: ${fmt(barberData.commissionRevenue)} | Assinante/Vale presente: ${fmt(barberData.commissionNonCash)}`} />
                 <MetricCard label="Atendimentos" value={barberData.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(avg(barberData.ticketGross, barberData.ticketCount))} icon={TrendingUp} color="yellow" />
             </div>
@@ -1194,7 +1029,7 @@ function StoreDetailView({ store, analytics, data }) {
             {/* Store Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
                 <MetricCard label="Faturamento Loja" value={fmt(analytics.gross)} icon={DollarSign} color="cyan" />
-                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="orange" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assin/Vale: ${fmt(analytics.commissionNonCash)}`} />
+                <MetricCard label="Comissões (Total)" value={fmt(analytics.commission)} icon={Users} color="orange" sub={`Receita: ${fmt(analytics.commissionRevenue)} | Assinante/Vale presente: ${fmt(analytics.commissionNonCash)}`} />
                 <MetricCard label="Resultado Líquido" value={fmt(analytics.gross - analytics.commission)} icon={Banknote} color="emerald" />
                 <MetricCard label="Atendimentos" value={analytics.serviceCount} icon={Scissors} color="blue" />
                 <MetricCard label="Ticket Médio" value={fmt(analytics.avgTicket)} icon={TrendingUp} color="yellow" />
@@ -1328,7 +1163,7 @@ function StoreSalesCards({ analytics }) {
             <div className="bg-gray-900 border border-pink-800/40 p-4 rounded-2xl shadow-lg">
                 <div className="flex items-center gap-2 mb-3">
                     <div className="bg-pink-900/40 p-1.5 rounded-lg"><Award size={16} className="text-pink-400" /></div>
-                    <span className="text-sm font-semibold text-gray-300">Venda de Vale Presente</span>
+                    <span className="text-sm font-semibold text-gray-300">Venda de vale presente</span>
                 </div>
                 <div className="text-2xl font-bold text-pink-400">{fmt(analytics.voucherSalesTotal)}</div>
                 <div className="text-xs text-gray-500 mt-1">{analytics.voucherSalesCount} venda(s)</div>
@@ -1411,63 +1246,6 @@ function PaymentBreakdown({ byPayment, total }) {
     )
 }
 
-function AllBarbersCard({ byBarber }) {
-    const barbers = Object.entries(byBarber)
-        .map(([id, info]) => {
-            const barberData = BARBERS.find(b => b.id === id)
-            const storeName = barberData ? (STORES.find(s => s.id === barberData.store)?.name || barberData.store) : ''
-            return { id, storeName, ...info }
-        })
-        .sort((a, b) => b.gross - a.gross)
-
-    if (barbers.length === 0) return null
-
-    return (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-lg">
-            <h3 className="font-semibold text-gray-200 mb-4 flex items-center gap-2">
-                <Users size={18} className="text-cyan-500" /> Todos os Barbeiros
-            </h3>
-            <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                    <thead className="text-gray-500 border-b border-gray-800 text-xs">
-                        <tr>
-                            <th className="py-2 pr-3 font-medium">Barbeiro</th>
-                            <th className="py-2 px-2 font-medium text-center">Loja</th>
-                            <th className="py-2 px-2 font-medium text-right">Faturamento</th>
-                            <th className="py-2 px-2 font-medium text-right">Com. Receita</th>
-                            <th className="py-2 px-2 font-medium text-right">Com. Assin/Vale</th>
-                            <th className="py-2 px-2 font-medium text-right">Com. Total</th>
-                            <th className="py-2 px-2 font-medium text-right">Resultado</th>
-                            <th className="py-2 px-2 font-medium text-center">Atend.</th>
-                            <th className="py-2 pl-2 font-medium text-right">Ticket Médio</th>
-                        </tr>
-                    </thead>
-                    <tbody className="text-gray-300 divide-y divide-gray-800/50">
-                        {barbers.map((b, i) => (
-                            <tr key={b.id} className="hover:bg-gray-800/30 transition-colors">
-                                <td className="py-2.5 pr-3 flex items-center gap-2">
-                                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${i === 0 ? 'bg-yellow-900/50 text-yellow-400' : 'bg-gray-800 text-gray-500'}`}>{i + 1}</span>
-                                    <span className="font-medium truncate">{b.name}</span>
-                                </td>
-                                <td className="py-2.5 px-2 text-center">
-                                    <span className="text-[10px] bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded">{b.storeName}</span>
-                                </td>
-                                <td className="py-2.5 px-2 text-right font-semibold text-cyan-400">{fmt(b.gross)}</td>
-                                <td className="py-2.5 px-2 text-right text-green-400">{fmt(b.commissionRevenue)}</td>
-                                <td className="py-2.5 px-2 text-right text-purple-400">{fmt(b.commissionNonCash)}</td>
-                                <td className="py-2.5 px-2 text-right font-semibold text-gray-200">{fmt(b.commission)}</td>
-                                <td className={`py-2.5 px-2 text-right font-semibold ${(b.gross - b.commission) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmt(b.gross - b.commission)}</td>
-                                <td className="py-2.5 px-2 text-center text-gray-400">{b.serviceCount}</td>
-                                <td className="py-2.5 pl-2 text-right text-yellow-400">{fmt(avg(b.ticketGross, b.ticketCount))}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    )
-}
-
 function TopServicesCard({ topServices }) {
     if (!topServices || topServices.length === 0) return null
     const maxVal = Math.max(...topServices.map(([, s]) => s.total), 1)
@@ -1496,47 +1274,6 @@ function TopServicesCard({ topServices }) {
                         </div>
                     </div>
                 ))}
-            </div>
-        </div>
-    )
-}
-
-function StoreManagerCard({ label, stats, color }) {
-    return (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-lg">
-            <div className="flex items-center gap-2 mb-4">
-                <DollarSign className={`text-${color}-500`} size={20} />
-                <h3 className="font-bold text-gray-200">Resumo {label}</h3>
-            </div>
-            <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                    <thead className="text-gray-500 border-b border-gray-800">
-                        <tr>
-                            <th className="py-2">Forma</th>
-                            <th className="py-2 text-right">Hoje</th>
-                            <th className="py-2 text-right">Mês Atual</th>
-                        </tr>
-                    </thead>
-                    <tbody className="text-gray-300 divide-y divide-gray-800">
-                        {[
-                            { label: 'Dinheiro', key: 'dinheiro' },
-                            { label: 'Pix', key: 'pix' },
-                            { label: 'Débito', key: 'debito' },
-                            { label: 'Crédito', key: 'credito' }
-                        ].map(row => (
-                            <tr key={row.key}>
-                                <td className="py-2">{row.label}</td>
-                                <td className="py-2 text-right">{fmt(stats.today[row.key])}</td>
-                                <td className="py-2 text-right">{fmt(stats.month[row.key])}</td>
-                            </tr>
-                        ))}
-                        <tr className="font-bold bg-gray-800/20">
-                            <td className={`py-2 text-${color}-400`}>Total</td>
-                            <td className={`py-2 text-right text-${color}-400`}>{fmt(stats.today.total)}</td>
-                            <td className={`py-2 text-right text-${color}-400`}>{fmt(stats.month.total)}</td>
-                        </tr>
-                    </tbody>
-                </table>
             </div>
         </div>
     )
