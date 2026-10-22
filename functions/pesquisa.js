@@ -24,10 +24,11 @@ function pesquisaHoje(cliente, agoraMs) {
     return ultima != null && dataHoraSP(new Date(ultima)).slice(0, 10) === dataHoraSP(new Date(agoraMs)).slice(0, 10);
 }
 
-// Outra task do mesmo cliente está enviando agora (ex.: lançamento dividido em 2)
+// Já há um envio em andamento para esse cliente, inclusive a mesma task entregue 2 vezes
+// pelo Cloud Tasks. Em falha a reserva é apagada, então a nova tentativa passa.
 function reservadaPorOutro(cliente, lancamentoId, agoraMs) {
     const r = ms(cliente?.pesquisaReservadaEm);
-    return r != null && agoraMs - r < RESERVA_MS && cliente.pesquisaReservadaPor !== lancamentoId;
+    return r != null && agoraMs - r < RESERVA_MS;
 }
 
 function dataHoraSP(date) {

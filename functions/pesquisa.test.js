@@ -25,10 +25,10 @@ test("1 por dia: bloqueia só se já recebeu hoje (fuso SP); ontem não bloqueia
     assert.equal(pesquisaHoje(undefined, agora), false);
 });
 
-test("reserva: outra task do mesmo cliente enviando agora bloqueia; a própria não", () => {
+test("reserva: envio em andamento bloqueia outra task e a mesma task entregue 2 vezes", () => {
     const c = { pesquisaReservadaEm: ts("2026-10-22T14:55:00Z"), pesquisaReservadaPor: "L1" };
     assert.equal(reservadaPorOutro(c, "L2", agora), true);
-    assert.equal(reservadaPorOutro(c, "L1", agora), false);
+    assert.equal(reservadaPorOutro(c, "L1", agora), true);
     assert.equal(reservadaPorOutro({ ...c, pesquisaReservadaEm: ts("2026-10-22T14:00:00Z") }, "L2", agora), false);
 });
 
