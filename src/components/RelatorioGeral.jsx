@@ -7,7 +7,7 @@ import {
     LOJAS, FORMAS_CAIXA, entrou, comissoes, sobrou, atendimentos, porBarbeiro, vendasNaoServico,
     formasPagamento, aPagarSemana, periodoAnterior, inicioDaSemana,
 } from '../utils/relatorio'
-import { resultadoMes, CELCOIN_AUTO_DESDE } from '../utils/assinaturas'
+import { resultadoMes, situacaoAssinantes, CELCOIN_AUTO_DESDE } from '../utils/assinaturas'
 import { ResultadoMes } from './SubscriptionMonitor'
 
 const fmt = (v) => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -261,7 +261,8 @@ function MonitorAssinaturas({ filters }) {
 
     const carregar = async () => {
         const [y, m] = mes.split('-').map(Number)
-        const ini = new Date(y, m - 1, 1), fim = new Date(y, m, 1)
+        // Do mês anterior ao seguinte: os ciclos dos assinantes atravessam a virada do mês
+        const ini = new Date(y, m - 2, 1), fim = new Date(y, m + 1, 1)
         const ultimoDia = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
         const [pag, lanc, conf, fin, assin] = await Promise.all([
             pagamentosEntre(`${mes}-01`, ultimoDia),
@@ -280,6 +281,7 @@ function MonitorAssinaturas({ filters }) {
 
     // Mesma função da aba Assinaturas: o número aqui tem que ser igual ao de lá
     const res = dados && resultadoMes({ mes, pagamentos: dados.pag, lancamentos: dados.lanc, assinantes: dados.assinantes, liquidoReal: dados.lapis, liquidoFinanceiro: dados.financeiro })
+    const foraRegra = dados ? situacaoAssinantes({ assinantes: dados.assinantes, lancamentos: dados.lanc, pagamentos: dados.pag, mes }).filter(s => s.grupos.includes('fora_regra')).length : 0
     const [y, mm] = mes.split('-')
     const nomeMes = `${MESES[Number(mm) - 1]}/${y}`
 
@@ -296,6 +298,11 @@ function MonitorAssinaturas({ filters }) {
                 </button>
             ) : !res ? <div className="text-sm text-gray-500">Calculando...</div> : (
                 <div className="space-y-2">
+                    {foraRegra > 0 && (
+                        <a href={`#/assinaturas?mes=${mes}&grupo=fora_regra`} className="block text-sm text-orange-300 bg-orange-950/30 border border-orange-800/50 rounded-lg px-3 py-2">
+                            ⚠ {foraRegra} assinante{foraRegra === 1 ? '' : 's'} fora da regra (menos de 7 dias entre visitas ou mais de 5 no ciclo) →
+                        </a>
+                    )}
                     <ResultadoMes res={res} mes={mes} lapis={dados.lapis} onSalvarLapis={salvarLapis} compacto />
                     <a href="#/assinaturas" className="inline-block text-sm text-purple-300 underline">Ver detalhes na aba Assinaturas →</a>
                 </div>

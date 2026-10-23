@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { db, collection, query, where, getDocs, doc, setDoc, updateDoc } from '../firebase'
 import { getDoc } from 'firebase/firestore'
 import { getApp } from 'firebase/app'
@@ -63,14 +64,16 @@ const GRUPOS = [
     { id: 'pagou_nao_veio', label: 'Pagou e não veio' },
     { id: 'recusado', label: 'Cartão recusado' },
     { id: 'cancelado_atendendo', label: 'Cancelado ainda atendendo' },
+    { id: 'fora_regra', label: 'Fora da regra' },
 ]
 
 export function SubscriptionMonitor() {
     const [dados, setDados] = useState(null)
     const [erro, setErro] = useState(null)
     const [loading, setLoading] = useState(true)
-    const [mes, setMes] = useState(mesAtual())
-    const [grupo, setGrupo] = useState('todos')
+    const [params] = useSearchParams()
+    const [mes, setMes] = useState(/^\d{4}-\d{2}$/.test(params.get('mes') || '') ? params.get('mes') : mesAtual())
+    const [grupo, setGrupo] = useState(GRUPOS.some(g => g.id === params.get('grupo')) ? params.get('grupo') : 'todos')
     const [busca, setBusca] = useState('')
 
     const carregar = () => {
@@ -345,7 +348,7 @@ function PorPlano({ planos }) {
                             <th className="text-right py-2 px-1 font-medium">Receita</th>
                             <th className="text-right py-2 px-1 font-medium">Comissões</th>
                             <th className="text-right py-2 px-1 font-medium">Resultado</th>
-                            <th className="text-right py-2 font-medium" title="visitas que o plano aguenta antes do prejuízo">Equilíbrio</th>
+                            <th className="text-right py-2 font-medium" title="líquido do plano − 5 visitas × comissão">Pior caso (5 visitas)</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-800">
@@ -357,18 +360,18 @@ function PorPlano({ planos }) {
                                 <td className="py-2 px-1 text-right">{p.comPagamento ? fmt(p.receita) : 'sem dado'}<span className="block text-[10px] text-gray-500">{p.comPagamento} pagos</span></td>
                                 <td className="py-2 px-1 text-right">{fmt(p.comissoes)}</td>
                                 <td className={`py-2 px-1 text-right font-bold ${p.comPagamento ? (p.resultado >= 0 ? 'text-emerald-400' : 'text-red-400') : 'text-gray-500'}`}>{p.comPagamento ? fmt(p.resultado) : '—'}</td>
-                                <td className="py-2 text-right">{p.equilibrio == null ? '—' : `${p.equilibrio} visitas`}</td>
+                                <td className={`py-2 text-right font-bold ${p.piorCaso == null ? 'text-gray-500' : p.piorCaso >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{p.piorCaso == null ? '—' : fmt(p.piorCaso)}</td>
                             </tr>
                         ))}
                     </tbody>
                 </table>
             </div>
-            <p className="text-[11px] text-gray-500 mt-2">Equilíbrio = (preço − taxa online) ÷ comissão por visita do plano. Receita só conta quem tem pagamento registrado no ciclo.</p>
+            <p className="text-[11px] text-gray-500 mt-2">Pior caso = preço − taxa online − 5 visitas × comissão por visita (regra: 1 visita por semana, até 5 por ciclo; 2 × Corte de Cria = 10 visitas). Receita só conta quem tem pagamento registrado no ciclo.</p>
         </section>
     )
 }
 
-const ROTULO_GRUPO = { prejuizo: 'dá prejuízo', pagou_nao_veio: 'pagou e não veio', recusado: 'cartão recusado', cancelado_atendendo: 'cancelado atendendo' }
+const ROTULO_GRUPO = { prejuizo: 'dá prejuízo', pagou_nao_veio: 'pagou e não veio', recusado: 'cartão recusado', cancelado_atendendo: 'cancelado atendendo', fora_regra: 'fora da regra' }
 
 const ROTULO_LIGACAO = { manual: 'vinculado à mão', telefone: 'telefone', codigo: 'código', nome: 'a conferir (só nome)' }
 
@@ -403,6 +406,11 @@ function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
                         {s.aConferir > 0 && <span className="text-orange-400">{s.aConferir} a conferir</span>}
                         {s.grupos.map(g => <span key={g} className="text-yellow-400">{ROTULO_GRUPO[g]}</span>)}
                     </div>
+                    {s.regra?.fora && (
+                        <div className="text-[11px] text-orange-300 mt-0.5">
+                            {s.regra.motivos.join(' · ')}: {s.regra.dias.map(d => `${d.dia.slice(8, 10)}/${d.dia.slice(5, 7)} ${(d.barbeiros[0] || '').split(' ')[0]}`).join(', ')}
+                        </div>
+                    )}
                 </div>
                 <div className={`text-sm font-bold whitespace-nowrap ${s.resultado == null ? 'text-gray-500' : s.resultado >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.resultado == null ? '—' : fmt(s.resultado)}</div>
             </button>

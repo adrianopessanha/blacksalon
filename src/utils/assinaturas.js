@@ -18,7 +18,7 @@ export const PLANOS = [
     { id: 'cria', label: 'Corte de Cria', preco: 80, comissaoVisita: 10 },
     { id: 'barba', label: 'Barba Ilimitada', preco: 80, comissaoVisita: 10 },
     { id: 'r80', label: 'R$ 80 (Cria ou Barba)', preco: 80, comissaoVisita: 10 },
-    { id: 'cria_x2', label: '2 × Corte de Cria', preco: 160, comissaoVisita: 10 },
+    { id: 'cria_x2', label: '2 × Corte de Cria', preco: 160, comissaoVisita: 10, pessoas: 2 },
 ]
 
 // Como o assinante paga. pix_manual: Pix programado fora da Celcoin, sem taxa, recebido todo mês enquanto ativo
@@ -169,6 +169,7 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
             ...a, plano, forma, ciclo: { inicio, fim },
             visitasDet, visitas: visitasDet.length, comissao,
             aConferir: visitasDet.filter(x => x.tipo === 'nome').length,
+            regra: foraDaRegra(visitasDet),
             pagou, liquido,
         }
     }).filter(Boolean)
@@ -188,6 +189,7 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
             const pag = porTel.get(s.pagador)
             const grupos = []
             if (s.status_assinatura === 'cancelada' && s.visitas > 0) grupos.push('cancelado_atendendo')
+            if (s.regra.fora) grupos.push('fora_regra')
             return { ...s, pagou: pag.pagou, liquido: null, resultado: null, grupos }
         }
         const visitasTotais = s.visitas + (s.visitasDependentes || 0)
@@ -198,6 +200,7 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
         if (s.pagou === true && visitasTotais === 0) grupos.push('pagou_nao_veio')
         if (s.status_assinatura === 'pagamento_recusado') grupos.push('recusado')
         if (s.status_assinatura === 'cancelada' && s.visitas > 0) grupos.push('cancelado_atendendo')
+        if (s.regra.fora) grupos.push('fora_regra')
         return { ...s, visitasTotais, comissaoTotal, resultado, grupos }
     })
 }
@@ -209,6 +212,36 @@ export function naoLigados(lancamentos, assinantes, inicio, fim) {
         return ehAtendAssinante(l) && d && d >= inicio && d <= fim && !assinantes.some(a => tipoLigacao(a, l))
     })
 }
+// Regra do plano: no mínimo 7 dias entre visitas e no máximo 5 visitas por ciclo (por pessoa)
+export const REGRA_PLANO = { diasEntreVisitas: 7, maxVisitasCiclo: 5 }
+
+// Lançamentos do mesmo dia contam como 1 visita (ex.: corte e barba lançados separados)
+export function foraDaRegra(visitasDet) {
+    const porDia = new Map()
+    for (const { l } of visitasDet) {
+        const d = toDate(l.data)
+        if (!d) continue
+        const dia = diaSP(d)
+        if (!porDia.has(dia)) porDia.set(dia, { dia, data: d, barbeiros: new Set() })
+        if (l.barbeiro_nome) porDia.get(dia).barbeiros.add(l.barbeiro_nome)
+    }
+    const dias = [...porDia.values()].sort((a, b) => a.dia.localeCompare(b.dia)).map(x => ({ dia: x.dia, barbeiros: [...x.barbeiros] }))
+    const motivos = []
+    const DIA_MS = 864e5
+    for (let i = 1; i < dias.length; i++) {
+        const gap = Math.round((Date.parse(dias[i].dia + 'T12:00:00Z') - Date.parse(dias[i - 1].dia + 'T12:00:00Z')) / DIA_MS)
+        if (gap < REGRA_PLANO.diasEntreVisitas) motivos.push(`visitas com ${gap} dia${gap === 1 ? '' : 's'} de diferença`)
+    }
+    if (dias.length > REGRA_PLANO.maxVisitasCiclo) motivos.push(`${dias.length} visitas no ciclo (máximo ${REGRA_PLANO.maxVisitasCiclo})`)
+    return { fora: motivos.length > 0, motivos, dias }
+}
+
+// Pior caso: líquido do plano (preço − taxa online) − visitas máximas × comissão por visita
+export function piorCaso(plano) {
+    if (!plano?.preco || !plano?.comissaoVisita) return null
+    return r2(plano.preco - taxaOnline(plano.preco) - REGRA_PLANO.maxVisitasCiclo * (plano.pessoas || 1) * plano.comissaoVisita)
+}
+
 // Ponto de equilíbrio: quantas visitas o plano aguenta antes do prejuízo (cobrança online)
 export function pontoEquilibrio(plano) {
     if (!plano?.preco || !plano?.comissaoVisita) return null
@@ -234,6 +267,7 @@ export function porPlano(situacao) {
         receita: r2(x.receita), comissoes: r2(x.comissoes),
         resultado: r2(x.resultado),
         equilibrio: pontoEquilibrio(x.plano),
+        piorCaso: piorCaso(x.plano),
     })).sort((a, b) => b.assinantes - a.assinantes)
 }
 
