@@ -132,7 +132,9 @@ const diaDoInicio = (a) => { const d = parseInt(String(a.inicio_contrato || a.ve
 export function tipoLigacao(a, l) {
     if (l.assinante_telefone) return l.assinante_telefone === a.telefone ? 'manual' : null
     if (l.cliente_telefone) return l.cliente_telefone === a.telefone ? 'telefone' : null
-    if (a.codigo_cliente && l.subscriber_code) return l.subscriber_code === a.codigo_cliente ? 'codigo' : null
+    // Código pode estar gravado como número (12) ou texto ("12"). Código diferente não bloqueia:
+    // são 2 contas Celcoin e o código muda de uma para outra; aí cai para o nome ("a conferir").
+    if (a.codigo_cliente && l.subscriber_code && String(l.subscriber_code).trim() === String(a.codigo_cliente).trim()) return 'codigo'
     const nome = semAcento(a.nome)
     return nome && semAcento(l.cliente_nome) === nome ? 'nome' : null
 }
@@ -236,17 +238,24 @@ export function porPlano(situacao) {
 }
 
 // Tendência: um ponto por mês; resumo = documento de resumos_assinatura (se existir)
-export function pontoTendencia(res, resumo, novosParcial) {
+// ativosHoje: só para o mês atual sem resumo gravado (contagem de agora, marcada "hoje")
+export function pontoTendencia(res, resumo, novosParcial, ativosHoje = null) {
+    // Mês sem nenhum lançamento de assinante: não é "R$ 0", é "sem dado"
+    const semLancamentos = res.atendimentos === 0 && res.balcaoQtd === 0
+    const ativos = resumo?.ativos ?? ativosHoje
     return {
         mes: res.mes,
-        ativos: resumo?.ativos ?? null,
+        ativos,
+        ativosHoje: resumo?.ativos == null && ativosHoje != null,
         novos: resumo?.novos ?? null,
         novosParcial: resumo ? null : novosParcial,
         cancelados: resumo?.cancelados ?? null,
         recusados: resumo?.recusados ?? null,
-        receita: res.receita, comissoes: res.comissoes, sobrou: res.sobrou, margem: res.margem,
-        atendimentos: res.atendimentos,
-        visitasPorAssinante: resumo?.ativos ? r2(res.atendimentos / resumo.ativos) : null,
+        receita: res.receita,
+        comissoes: semLancamentos ? null : res.comissoes,
+        sobrou: res.sobrou, margem: res.margem,
+        atendimentos: semLancamentos ? null : res.atendimentos,
+        visitasPorAssinante: ativos && !semLancamentos ? r2(res.atendimentos / ativos) : null,
     }
 }
 

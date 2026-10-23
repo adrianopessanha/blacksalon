@@ -84,7 +84,8 @@ export function SubscriptionMonitor() {
         const res = resultadoDoMes(dados, mes)
         const meses = mesesAte(mesAtual(), 12)
         const novosParcial = (m) => dados.assinantes.filter(a => String(a.inicio_contrato || '').startsWith(m)).length
-        const serie = meses.map(m => pontoTendencia(resultadoDoMes(dados, m), dados.resumos[m], novosParcial(m)))
+        const ativosHoje = dados.assinantes.filter(a => a.status_assinatura === 'ativa').length
+        const serie = meses.map(m => pontoTendencia(resultadoDoMes(dados, m), dados.resumos[m], novosParcial(m), m === mesAtual() ? ativosHoje : null))
         const situacao = situacaoAssinantes({ assinantes: dados.assinantes, lancamentos: dados.lancamentos, pagamentos: dados.pagamentos, mes })
         return { res, serie, situacao, planos: porPlano(situacao) }
     }, [dados, mes])
@@ -262,7 +263,7 @@ function Tendencia({ serie }) {
         const v = p[campo]
         return (
             <td key={p.mes} className="px-2 py-1.5 text-right whitespace-nowrap">
-                {v == null ? <span className="text-gray-600">{opts.parcial && p.novosParcial != null ? `${p.novosParcial}*` : 'sem dado'}</span> : fmtf(v)}
+                {v == null ? <span className="text-gray-600">{opts.parcial && p.novosParcial != null ? `${p.novosParcial}*` : 'sem dado'}</span> : fmtf(v, p)}
                 {v != null && !opts.semSeta && <span className="ml-1" title="vs mês anterior / vs média 3 meses"><Seta s={t.vsAnterior} /><Seta s={t.vsMedia3} /></span>}
             </td>
         )
@@ -290,7 +291,7 @@ function Tendencia({ serie }) {
                 <table className="text-xs text-gray-300">
                     <thead className="text-gray-500"><tr><th className="text-left px-2 py-1.5 font-medium sticky left-0 bg-gray-900">Mês</th>{serie.map(p => <th key={p.mes} className="px-2 py-1.5 font-medium text-right">{nomeMes(p.mes)}</th>)}</tr></thead>
                     <tbody className="divide-y divide-gray-800">
-                        <tr><td className="px-2 py-1.5 sticky left-0 bg-gray-900">Ativos (fim do mês)</td>{col('ativos', v => v)}</tr>
+                        <tr><td className="px-2 py-1.5 sticky left-0 bg-gray-900">Ativos (fim do mês)</td>{col('ativos', (v, p) => p.ativosHoje ? <span>{v} <span className="text-[10px] text-cyan-400">hoje</span></span> : v)}</tr>
                         <tr><td className="px-2 py-1.5 sticky left-0 bg-gray-900">Novos</td>{col('novos', v => v, { parcial: true })}</tr>
                         <tr><td className="px-2 py-1.5 sticky left-0 bg-gray-900">Cancelados</td>{col('cancelados', v => v)}</tr>
                         <tr><td className="px-2 py-1.5 sticky left-0 bg-gray-900">Recusados</td>{col('recusados', v => v)}</tr>

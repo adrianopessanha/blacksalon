@@ -129,3 +129,16 @@ test('ligação: manual vence telefone; só por nome fica "a conferir"; não lig
     const soltos = naoLigados([atend(new Date(2026, 10, 7, 12).toISOString(), 10, { cliente_nome: 'Fulano' })], [a], new Date(2026, 10, 1), new Date(2026, 10, 30))
     assert.equal(soltos.length, 1)
 })
+
+import { pontoTendencia } from './assinaturas.js'
+
+test('tendência: mês sem lançamento mostra sem dado; mês atual usa ativos de hoje', () => {
+    const vazio = pontoTendencia(resultadoMes({ mes: '2025-11' }), null, 2)
+    assert.equal(vazio.comissoes, null)
+    assert.equal(vazio.atendimentos, null)
+    const atual = pontoTendencia(resultadoMes({ mes: '2026-10', lancamentos: [atend('2026-10-05T15:00:00Z', 10)] }), null, 1, 86)
+    assert.equal(atual.ativos, 86)
+    assert.equal(atual.ativosHoje, true)
+    assert.equal(atual.comissoes, 10)
+    assert.equal(pontoTendencia(resultadoMes({ mes: '2026-11' }), { ativos: 80 }, 0, 86).ativosHoje, false)
+})
