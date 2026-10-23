@@ -23,12 +23,11 @@ test('dependente segue o pagador', () => {
     assert.equal(s.proximoVencimento, '2026-11-18')
 })
 
-test('busca: telefone com ou sem 55/DDD, parte do número; nome sem acento e parcial', () => {
-    const lista = [{ nome: 'Andréia de Jesus', telefone: '5521964598462' }, { nome: 'Cleyson Ribeiro', telefone: '5521984120099' }]
-    assert.equal(buscarAssinantes(lista, '(21) 96459-8462')[0].nome, 'Andréia de Jesus')
-    assert.equal(buscarAssinantes(lista, '5521964598462').length, 1)
-    assert.equal(buscarAssinantes(lista, '964598462').length, 1)
-    assert.equal(buscarAssinantes(lista, '0099')[0].nome, 'Cleyson Ribeiro')
+test('busca: telefone completo pelo código do servidor; nome sem acento e parcial', () => {
+    const lista = [{ nome: 'Andréia de Jesus', cliente_id: 'c_aaa' }, { nome: 'Cleyson Ribeiro', cliente_id: 'c_bbb' }]
+    assert.equal(buscarAssinantes(lista, '(21) 96459-8462', 'c_aaa')[0].nome, 'Andréia de Jesus')
+    assert.equal(buscarAssinantes(lista, '5521964598462', null).length, 0) // código ainda não chegou
+    assert.equal(buscarAssinantes(lista, '964598462', 'c_zzz').length, 0)
     assert.equal(buscarAssinantes(lista, 'andreia').length, 1)
     assert.equal(buscarAssinantes(lista, 'RIBEI').length, 1)
     assert.equal(buscarAssinantes(lista, 'x').length, 0)

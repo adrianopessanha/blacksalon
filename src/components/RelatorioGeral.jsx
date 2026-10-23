@@ -9,6 +9,8 @@ import {
 } from '../utils/relatorio'
 import { resultadoMes, situacaoAssinantes, CELCOIN_AUTO_DESDE } from '../utils/assinaturas'
 import { ResultadoMes } from './SubscriptionMonitor'
+import { lancamentoComTelefone } from '../utils/privado'
+import { carregarTelefones } from '../hooks/useClientes'
 
 const fmt = (v) => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const NOME_LOJA = { 'loja-01': 'Loja 01', 'loja-02': 'Loja 02', total: 'Total' }
@@ -264,13 +266,16 @@ function MonitorAssinaturas({ filters }) {
         // Do mês anterior ao seguinte: os ciclos dos assinantes atravessam a virada do mês
         const ini = new Date(y, m - 2, 1), fim = new Date(y, m + 1, 1)
         const ultimoDia = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
-        const [pag, lanc, conf, fin, assin] = await Promise.all([
+        const [pag, lancSemTel, conf, fin, assin, { telDe }] = await Promise.all([
             pagamentosEntre(`${mes}-01`, ultimoDia),
             lancamentosEntre(ini, fim),
             getDoc(doc(db, 'configuracoes', 'assinaturas_liquido_real')),
             mes < CELCOIN_AUTO_DESDE ? getDocs(query(collection(db, 'financeiro'), where('finance_category', '==', 'receita_celcoin'))) : null,
             getDocs(collection(db, 'assinantes')),
+            carregarTelefones(),
         ])
+        // Mesma ligação lançamento-assinante da aba Assinaturas (telefone vem de clientes_privado)
+        const lanc = lancSemTel.map(l => lancamentoComTelefone(l, telDe))
         const antigo = fin ? fin.docs.map(d => d.data())
             .filter(d => d.status !== 'provisionado' && (d.competence_month === mes || String(d.date || '').startsWith(mes)))
             .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0) : 0

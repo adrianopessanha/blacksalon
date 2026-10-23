@@ -65,7 +65,8 @@ function parseAgendamento(body) {
     const barbeiro = extrairBarbeiro(b.confirmacao);
     return {
         ok: true,
-        id: `${telefone}_${dh.data.replace(/-/g, "")}_${dh.hora.replace(":", "")}`,
+        // ID final: {código do cliente}_{sufixo}
+        sufixo: `${dh.data.replace(/-/g, "")}_${dh.hora.replace(":", "")}`,
         telefone,
         nome: extrairNome(b.assunto),
         data: dh.data,

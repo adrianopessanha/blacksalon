@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, X, User, Clock, UserPlus, Loader2 } from 'lucide-react'
 import { useAgendamentosDoDia, useAgendamentosAtendidos, useIsAdmin, buscarClientePorTelefone, cadastrarClienteBalcao } from '../hooks/useClientes'
-import { normalizeTelefone55, formatTelefone, maskTelefone, semAcento } from '../utils/phone'
+import { normalizeTelefone55, maskTelefone, semAcento } from '../utils/phone'
 
 const UNIDADE_LABEL = { '01': 'Unidade 1', '02': 'Unidade 2' }
 
@@ -15,7 +15,7 @@ const onEnter = (fn) => (e) => {
     }
 }
 
-// value: { nome, telefone, agendamento_id, barbeiro_agendado } | null
+// value: { nome, cliente_id, agendamento_id, barbeiro_agendado } | null (nunca o telefone)
 export function ClientePicker({ value, onChange, unidade, barbeiroNome, hoje }) {
     const [open, setOpen] = useState(false)
 
@@ -27,7 +27,6 @@ export function ClientePicker({ value, onChange, unidade, barbeiroNome, hoje }) 
                     <User size={16} className="text-cyan-400 shrink-0" />
                     <div className="flex-1 min-w-0">
                         <div className="text-sm text-cyan-200 font-medium truncate">{value.nome}</div>
-                        {value.telefone && <div className="text-[10px] text-gray-500">{formatTelefone(value.telefone)}</div>}
                     </div>
                     <button type="button" onClick={() => setOpen(true)}
                         className="text-gray-400 hover:text-cyan-300 text-xs px-2 py-0.5 rounded bg-gray-800">trocar</button>
@@ -137,7 +136,7 @@ function PickerModal({ unidade, barbeiroNome, hoje, onClose, onSelect }) {
                             {lista.map(a => (
                                 <button type="button" key={a.id}
                                     ref={el => { itemRefs.current[a.id] = el }}
-                                    onClick={() => onSelect({ nome: a.nome, telefone: a.telefone, agendamento_id: a.id, barbeiro_agendado: a.barbeiro || null })}
+                                    onClick={() => onSelect({ nome: a.nome, cliente_id: a.cliente_id || null, agendamento_id: a.id, barbeiro_agendado: a.barbeiro || null })}
                                     className={`w-full text-left px-4 py-3 border-b border-gray-800/60 hover:bg-cyan-950/30 flex items-center gap-3 scroll-mt-2 ${ehMeu(a) ? 'border-l-2 border-l-cyan-500 bg-cyan-950/10' : ''} ${atendidos.has(a.id) ? 'opacity-50' : ''}`}>
                                     <span className="text-cyan-400 font-mono text-sm w-12 shrink-0 flex items-center gap-1"><Clock size={12} />{a.hora}</span>
                                     <span className="flex-1 min-w-0">
@@ -168,7 +167,7 @@ function PickerModal({ unidade, barbeiroNome, hoje, onClose, onSelect }) {
                                 </button>
                             </div>
                             {busca.trim() && !buscaTemDigitos && (
-                                <button type="button" onClick={() => onSelect({ nome: busca.trim(), telefone: '' })}
+                                <button type="button" onClick={() => onSelect({ nome: busca.trim(), cliente_id: null })}
                                     className="w-full text-[11px] text-gray-600 hover:text-gray-400 pt-1">
                                     usar só o nome "{busca.trim()}" sem cadastro
                                 </button>
@@ -260,10 +259,10 @@ function BuscaTelefone({ inicial, unidade, barbeiroNome, onVoltar, onSelect }) {
             </div>
 
             {estado === 'achou' && cliente && (
-                <button type="button" onClick={() => onSelect({ nome: cliente.nome, telefone: cliente.telefone })}
+                <button type="button" onClick={() => onSelect({ nome: cliente.nome, cliente_id: cliente.cliente_id })}
                     className="w-full text-left bg-cyan-950/30 border border-cyan-700/50 rounded-lg p-3 hover:bg-cyan-900/30">
                     <div className="text-sm text-cyan-200 font-bold">{cliente.nome}</div>
-                    <div className="text-xs text-gray-500">{formatTelefone(cliente.telefone)} · toque para selecionar</div>
+                    <div className="text-xs text-gray-500">toque para selecionar</div>
                 </button>
             )}
 
@@ -306,7 +305,7 @@ function NovoCliente({ nomeInicial = '', telInicial = '', aviso, unidade, barbei
         setSalvando(true)
         try {
             const c = await cadastrarClienteBalcao({ nome, telefone: tel55, unidade, barbeiro: barbeiroNome })
-            onSelect({ nome: c.nome, telefone: c.telefone })
+            onSelect({ nome: c.nome, cliente_id: c.cliente_id })
         } catch (err) {
             console.error(err)
             setErro('Erro ao cadastrar: ' + err.message)
@@ -335,7 +334,7 @@ function NovoCliente({ nomeInicial = '', telInicial = '', aviso, unidade, barbei
             {existente && (
                 <div className="bg-yellow-950/30 border border-yellow-700/50 rounded-lg p-3 space-y-2">
                     <div className="text-sm text-yellow-200">Esse telefone já é do cliente <b>{existente.nome}</b>: usar esse?</div>
-                    <button type="button" onClick={() => onSelect({ nome: existente.nome, telefone: existente.telefone })}
+                    <button type="button" onClick={() => onSelect({ nome: existente.nome, cliente_id: existente.cliente_id })}
                         className="w-full bg-yellow-600 hover:bg-yellow-500 text-white text-sm font-bold py-2 rounded-lg">
                         Usar {existente.nome}
                     </button>

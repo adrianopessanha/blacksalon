@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { db, collection, addDoc, serverTimestamp, auth, signOut, query, where, getDocs, doc, setDoc, deleteDoc, updateDoc } from '../firebase'
+import { db, collection, addDoc, serverTimestamp, auth, signOut, query, where, getDocs, doc, setDoc, deleteDoc, updateDoc, chamarFuncao } from '../firebase'
 import { Timestamp, getDoc } from 'firebase/firestore'
 import { Save, Calendar, User, Scissors, DollarSign, TrendingUp, ChevronLeft, ChevronRight, Search, UserCheck, AlertTriangle, Phone, CreditCard, Trash2, Pencil, X } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
@@ -9,8 +9,8 @@ import { useBarberStats } from '../hooks/useBarberStats'
 import { useSubscribers } from '../hooks/useSubscribers'
 import { useVoucherClients } from '../hooks/useVoucherClients'
 import { ClientePicker } from './ClientePicker'
-import { storeToUnidade } from '../hooks/useClientes'
-import { normalizePhone, normalizeTelefone55 } from '../utils/phone'
+import { storeToUnidade, codigoDoTelefone, cadastrarClienteBalcao } from '../hooks/useClientes'
+import { normalizeTelefone55 } from '../utils/phone'
 
 // ==========================================
 // SUBSCRIPTION PLANS
@@ -56,7 +56,8 @@ export function ServiceForm() {
         tipo: 'servico',
         data_manual: '',
         cliente_nome: '',
-        cliente_telefone: '',
+        cliente_id: '', // código do cliente escolhido na lista (sem telefone)
+        cliente_telefone: '', // só o que o barbeiro digita na venda de assinatura/vale
         subscriber_code: ''
     })
     const [voucherBalance, setVoucherBalance] = useState(null)
@@ -76,16 +77,30 @@ export function ServiceForm() {
     const isRenovacao = formData.tipo === 'renovacao_celcoin'
     const isAssinVenda = formData.tipo === 'venda_assinatura' || isRenovacao
 
-    // Status da assinatura (gravado pela Celcoin em clientes/{telefone})
-    const tel55Cliente = normalizeTelefone55(formData.cliente_telefone)
+    // Telefone digitado na venda: o servidor devolve só o código do cliente
+    const usaTelefoneDigitado = formData.tipo === 'venda_vale' || isAssinVenda
+    const tel55Digitado = usaTelefoneDigitado ? normalizeTelefone55(formData.cliente_telefone) : ''
+    const [cidDigitado, setCidDigitado] = useState(null)
     useEffect(() => {
-        if (!tel55Cliente) { setClienteInfo(null); return }
+        setCidDigitado(null)
+        if (!tel55Digitado) return
         let cancelado = false
-        getDoc(doc(db, 'clientes', tel55Cliente))
+        codigoDoTelefone(tel55Digitado)
+            .then(cid => { if (!cancelado) setCidDigitado(cid) })
+            .catch(err => console.error('resolverCliente:', err))
+        return () => { cancelado = true }
+    }, [tel55Digitado])
+    const cidCliente = cidDigitado || formData.cliente_id || null
+
+    // Status da assinatura (gravado pela Celcoin em clientes/{código})
+    useEffect(() => {
+        if (!cidCliente) { setClienteInfo(null); return }
+        let cancelado = false
+        getDoc(doc(db, 'clientes', cidCliente))
             .then(snap => { if (!cancelado) setClienteInfo(snap.exists() ? snap.data() : null) })
             .catch(err => console.error('clientes:', err))
         return () => { cancelado = true }
-    }, [tel55Cliente])
+    }, [cidCliente])
 
     const [splitPayment, setSplitPayment] = useState(false)
     const [splitForma2, setSplitForma2] = useState('Crédito')
@@ -277,20 +292,21 @@ export function ServiceForm() {
             return alert('Venda de Assinatura ou Vale Presente só pode ser feita com pagamento real (Dinheiro, Pix, Crédito ou Débito).')
         }
 
-        if (isAssinVenda && (!formData.cliente_nome || !formData.cliente_telefone)) {
-            return alert('Para venda de Assinatura, Nome e Telefone do cliente são obrigatórios.')
+        const temCliente = !!formData.cliente_id || !!normalizeTelefone55(formData.cliente_telefone)
+        if (formData.cliente_telefone && !normalizeTelefone55(formData.cliente_telefone) && usaTelefoneDigitado) {
+            return alert('Telefone inválido. Informe DDD + número.')
         }
 
-        if (isRenovacao && !normalizeTelefone55(formData.cliente_telefone)) {
-            return alert('Telefone inválido. Selecione o cliente pela lista ou informe DDD + número.')
+        if (isAssinVenda && (!formData.cliente_nome || !temCliente)) {
+            return alert('Para venda de Assinatura: selecione o cliente da lista ou informe Nome e Telefone.')
         }
 
         if (isAssinVenda && !selectedPlan) {
             return alert('Selecione o plano da assinatura.')
         }
 
-        if (formData.tipo === 'venda_vale' && (!formData.cliente_nome || !formData.cliente_telefone)) {
-            return alert('Para venda de Vale Presente, Nome e Telefone do cliente são obrigatórios.')
+        if (formData.tipo === 'venda_vale' && (!formData.cliente_nome || !temCliente)) {
+            return alert('Para venda de Vale Presente: selecione o cliente da lista ou informe Nome e Telefone.')
         }
 
         if (formData.forma_pagamento === 'Vale Presente' && (!formData.cliente_nome)) {
@@ -306,6 +322,13 @@ export function ServiceForm() {
         try {
             if (!activeBarber) throw new Error('Nenhum barbeiro selecionado.')
 
+            // Telefone digitado (venda): cadastra se for novo e usa o código; senão, o código da lista
+            let clienteId = formData.cliente_id || null
+            if (tel55Digitado) {
+                const c = await cadastrarClienteBalcao({ nome: formData.cliente_nome, telefone: tel55Digitado, unidade: storeToUnidade(activeBarber.store), barbeiro: activeBarber.name })
+                clienteId = c.cliente_id
+            }
+
             // Registrar cliente de vale se for venda de vale
             if (formData.tipo === 'venda_vale') {
                 const valorTotal = parseFloat(formData.valor_bruto)
@@ -313,7 +336,7 @@ export function ServiceForm() {
                 const clientRef = doc(db, 'clientes_vale', formData.cliente_nome.toLowerCase().trim())
                 await setDoc(clientRef, {
                     nome: formData.cliente_nome.trim(),
-                    telefone: normalizePhone(formData.cliente_telefone),
+                    cliente_id: clienteId,
                     valor_por_uso: valorPorUso,
                     valor_total: valorTotal,
                     updated_at: serverTimestamp()
@@ -353,7 +376,7 @@ export function ServiceForm() {
                 barbeiro_nome: activeBarber.name,
                 loja_id: activeBarber.store,
                 cliente_nome: formData.cliente_nome || 'Não Informado',
-                cliente_telefone: normalizeTelefone55(formData.cliente_telefone) || null,
+                cliente_id: clienteId,
                 agendamento_id: agendamentoSel?.agendamento_id || null,
                 barbeiro_agendado: agendamentoSel?.barbeiro_agendado || null,
                 subscriber_code: formData.subscriber_code || null,
@@ -442,86 +465,38 @@ export function ServiceForm() {
                 alert(`Lançamento salvo para ${activeBarber.name}!`)
             }
 
-            // Assinante de balcão (sem cartão recorrente): registra/renova em assinantes/{telefone}
-            const tel55Venda = normalizeTelefone55(formData.cliente_telefone)
-            if (formData.tipo === 'venda_assinatura' && tel55Venda) {
-                const ref = doc(db, 'assinantes', tel55Venda)
-                // Barbeiro lê só a visão reduzida (sem valores); a escrita vai no cadastro
-                const existente = await getDoc(doc(db, 'assinantes_publico', tel55Venda))
-                const origemAtual = existente.exists() ? existente.data().origem : null
-                const hojeStr = todayStr
-                const venc = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate())
-                const vencStr = venc.getFullYear() + '-' + String(venc.getMonth() + 1).padStart(2, '0') + '-' + String(venc.getDate()).padStart(2, '0')
-                // Celcoin: só a função atualiza. Abacatepay: só admin renova, mantendo a origem.
-                if (origemAtual === 'abacatepay' && isAdmin) {
-                    await setDoc(ref, {
-                        status_assinatura: 'ativa',
-                        status_original: 'Paga fora do sistema',
-                        vencimento: vencStr,
-                        ciclo_desde: hojeStr,
-                        ultima_atualizacao: serverTimestamp(),
-                    }, { merge: true })
-                } else if (origemAtual && origemAtual !== 'balcao') {
-                    alert(`Lançamento salvo, mas o cadastro de assinante NÃO foi alterado: este cliente é assinante ${origemAtual}. Avise o Adriano.`)
-                } else {
-                await setDoc(ref, {
-                    nome: formData.cliente_nome.trim(),
-                    telefone: tel55Venda,
-                    plano: selectedPlan.label,
-                    valor: parseFloat(formData.valor_bruto),
-                    origem: 'balcao',
-                    status_assinatura: 'ativa',
-                    status_original: 'Paga fora do sistema',
-                    vencimento: vencStr,
-                    // Nova venda reativa e reinicia o ciclo na data da venda (mesmo documento: nunca duplica)
-                    ciclo_desde: hojeStr,
-                    ultima_atualizacao: serverTimestamp(),
-                    ...(existente.exists() && existente.data().inicio_contrato ? {} : { inicio_contrato: hojeStr }),
-                }, { merge: true })
-                }
-            }
-
-            // Webhook Make.com — notificar venda de assinatura
-            if (formData.tipo === 'venda_assinatura') {
-                const now2 = new Date()
-                const telefoneNormalizado = normalizePhone(formData.cliente_telefone)
-                fetch('https://hook.us1.make.com/qym41xlme1xcqlqcp4eekavzx53h9mut', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        evento: 'venda_assinatura',
-                        cliente_nome: formData.cliente_nome.trim(),
-                        telefone: telefoneNormalizado,
-                        cliente_telefone: telefoneNormalizado,
+            // Assinante de balcão: o servidor grava assinantes/{telefone} e avisa o Make
+            // (Celcoin nunca muda; Abacatepay só admin renova)
+            if (formData.tipo === 'venda_assinatura' && clienteId) {
+                try {
+                    const r = await chamarFuncao('venderAssinaturaBalcao', {
+                        cliente_id: clienteId,
+                        nome: formData.cliente_nome.trim(),
                         plano: selectedPlan.label,
                         plano_id: selectedPlan.id,
                         valor: parseFloat(formData.valor_bruto),
-                        status: 'Paga fora do sistema',
                         barbeiro: activeBarber.name,
                         loja: activeBarber.store,
                         forma_pagamento: formData.forma_pagamento,
-                        data: now2.toLocaleDateString('pt-BR'),
-                        hora: now2.toLocaleTimeString('pt-BR'),
-                        data_hora_iso: now2.toISOString()
                     })
-                }).catch(err => console.error('Webhook assinatura erro:', err))
+                    if (r.resultado === 'bloqueado') {
+                        alert(`Lançamento salvo, mas o cadastro de assinante NÃO foi alterado: este cliente é assinante ${r.origem}. Avise o Adriano.`)
+                    }
+                } catch (err) {
+                    console.error('venderAssinaturaBalcao:', err)
+                    alert('Lançamento salvo, mas o cadastro de assinante não foi atualizado: ' + err.message + '. Avise o Adriano.')
+                }
             }
 
-            // Webhook Make.com — notificar compra ou uso de vale presente
+            // Make.com — compra ou uso de vale presente (o servidor inclui o telefone)
             if (formData.tipo === 'venda_vale' || formData.forma_pagamento === 'Vale Presente') {
-                const now2 = new Date()
-                const telefoneNormalizado = normalizePhone(formData.cliente_telefone)
                 const webhookData = {
                     evento: formData.tipo === 'venda_vale' ? 'compra_vale' : 'uso_vale',
+                    cliente_id: clienteId,
                     cliente_nome: formData.cliente_nome.trim(),
-                    telefone: telefoneNormalizado,
-                    cliente_telefone: telefoneNormalizado,
                     valor: parseFloat(formData.valor_bruto),
                     barbeiro: activeBarber.name,
                     loja: activeBarber.store,
-                    data: now2.toLocaleDateString('pt-BR'),
-                    hora: now2.toLocaleTimeString('pt-BR'),
-                    data_hora_iso: now2.toISOString()
                 }
                 // Adicionar info extra para cada tipo
                 if (formData.tipo === 'venda_vale') {
@@ -533,14 +508,10 @@ export function ServiceForm() {
                     webhookData.saldo_restante = (voucherBalance || 0) - 1
                     webhookData.servico = formData.servico_descricao
                 }
-                fetch('https://hook.us1.make.com/foskacjnw4sc883k1r7m82dsc4nmuhk3', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(webhookData)
-                }).catch(err => console.error('Webhook erro:', err))
+                chamarFuncao('notificarVale', webhookData).catch(err => console.error('notificarVale:', err))
             }
 
-            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', cliente_telefone: '', subscriber_code: '' })
+            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', cliente_id: '', cliente_telefone: '', subscriber_code: '' })
             setSelectedPresets([])
             setShowCustomDesc(false)
             setVoucherBalance(null)
@@ -774,7 +745,9 @@ export function ServiceForm() {
                             {/* Captura de Telefone (para Venda de Vale e Venda de Assinatura) */}
                             {(formData.tipo === 'venda_vale' || isAssinVenda) && (
                                 <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
-                                    <label className="block text-xs text-cyan-400 font-bold uppercase tracking-wider">Telefone do Cliente (Obrigatório)</label>
+                                    <label className="block text-xs text-cyan-400 font-bold uppercase tracking-wider">
+                                        Telefone do Cliente {formData.cliente_id ? '(cliente já selecionado na lista)' : '(Obrigatório)'}
+                                    </label>
                                     <div className="relative">
                                         <Phone className="absolute left-3 top-2.5 text-cyan-600" size={16} />
                                         <input
@@ -840,7 +813,7 @@ export function ServiceForm() {
                                                     <UserCheck size={16} className="text-purple-400" />
                                                     <span className="text-purple-300 text-sm font-medium flex-1">{formData.cliente_nome}</span>
                                                     <button type="button"
-                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '', cliente_telefone: '', subscriber_code: '' }); setSubscriberSearch('') }}
+                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '', cliente_id: '', cliente_telefone: '', subscriber_code: '' }); setSubscriberSearch('') }}
                                                         className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
                                                     >trocar</button>
                                                 </div>
@@ -866,7 +839,7 @@ export function ServiceForm() {
                                                                 filtered.slice(0, 20).map((sub, i) => (
                                                                     <button type="button" key={i}
                                                                         onClick={() => {
-                                                                            setFormData({ ...formData, cliente_nome: sub.name, cliente_telefone: sub.phone || '', subscriber_code: sub.code || '' })
+                                                                            setFormData({ ...formData, cliente_nome: sub.name, cliente_id: sub.cliente_id || '', cliente_telefone: '', subscriber_code: sub.code || '' })
                                                                             setSubscriberSearch('')
                                                                             setShowSubscriberDropdown(false)
                                                                         }}
@@ -906,11 +879,10 @@ export function ServiceForm() {
                                                 <div className="flex items-center gap-2 bg-pink-900/20 border border-pink-700/50 rounded-lg py-2 px-3">
                                                     <div className="flex-1">
                                                         <div className="text-pink-300 text-sm font-bold">{formData.cliente_nome}</div>
-                                                        <div className="text-[10px] text-gray-500">{formData.cliente_telefone}</div>
                                                     </div>
                                                     <button type="button"
                                                         onClick={() => {
-                                                            setFormData({ ...formData, cliente_nome: '', cliente_telefone: '', valor_bruto: '' })
+                                                            setFormData({ ...formData, cliente_nome: '', cliente_id: '', cliente_telefone: '', valor_bruto: '' })
                                                             setVoucherSearch('')
                                                             setVoucherBalance(null)
                                                             setVoucherValorPorUso(null)
@@ -949,7 +921,7 @@ export function ServiceForm() {
                                                                 filtered.map((cl, i) => (
                                                                     <button type="button" key={i}
                                                                         onClick={() => {
-                                                                            setFormData({ ...formData, cliente_nome: cl.nome, cliente_telefone: cl.telefone || '' })
+                                                                            setFormData({ ...formData, cliente_nome: cl.nome, cliente_id: cl.cliente_id || '', cliente_telefone: '' })
                                                                             setVoucherSearch('')
                                                                             setShowVoucherDropdown(false)
                                                                         }}
@@ -957,7 +929,6 @@ export function ServiceForm() {
                                                                     >
                                                                         <div>
                                                                             <div className="text-sm text-gray-200 font-medium">{cl.nome}</div>
-                                                                            <div className="text-[10px] text-gray-500">{cl.telefone}</div>
                                                                         </div>
                                                                     </button>
                                                                 ))
@@ -972,12 +943,12 @@ export function ServiceForm() {
 
                                 return (
                                     <ClientePicker
-                                        value={formData.cliente_nome ? { nome: formData.cliente_nome, telefone: normalizeTelefone55(formData.cliente_telefone) } : null}
+                                        value={formData.cliente_nome ? { nome: formData.cliente_nome, cliente_id: formData.cliente_id } : null}
                                         unidade={storeToUnidade(activeBarber?.store)}
                                         barbeiroNome={activeBarber?.name}
                                         hoje={today}
                                         onChange={c => {
-                                            setFormData({ ...formData, cliente_nome: c?.nome || '', cliente_telefone: c?.telefone || '' })
+                                            setFormData({ ...formData, cliente_nome: c?.nome || '', cliente_id: c?.cliente_id || '', cliente_telefone: '' })
                                             setAgendamentoSel(c?.agendamento_id ? c : null)
                                         }}
                                     />

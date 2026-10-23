@@ -44,38 +44,43 @@ service cloud.firestore {
       allow read, write: if isAuthorized();
     }
 
+    // Clientes do vale: sem telefone (fica em clientes_privado; o app grava cliente_id)
     match /clientes_vale/{docId} {
-      allow read, write: if isAuthorized();
+      allow read, delete: if isAuthorized();
+      allow create, update: if isAuthorized() && !('telefone' in request.resource.data);
     }
 
     match /fechamentos/{docId} {
       allow read, write: if isAuthorized();
     }
 
-    // Base de clientes — ID = telefone 55+DDD+número
-    match /clientes/{telefone} {
-      allow read, write: if isAuthorized();
+    // Base de clientes — ID = código do cliente (c_...), sem telefone.
+    // Gravada só pelas funções (Booksy, Celcoin, resolverCliente).
+    match /clientes/{cid} {
+      allow read: if isAuthorized();
+      allow write: if isAdmin();
     }
 
-    // Reservas — ID = {telefone}_{AAAAMMDD}_{HHmm}
+    // Telefone de cada cliente — ID = código do cliente. Só admin.
+    match /clientes_privado/{cid} {
+      allow read, write: if isAdmin();
+    }
+
+    // Reservas — ID = {código}_{AAAAMMDD}_{HHmm}. Gravadas pela função do Booksy.
     match /agendamentos/{docId} {
-      allow read, write: if isAuthorized();
+      allow read: if isAuthorized();
+      allow write: if isAdmin();
     }
 
-    // Assinantes — ID = telefone. Cadastro completo (valores, códigos): só admin lê.
-    // Barbeiro só cria/altera origem "balcao"; celcoin/abacatepay só admin (ou a função, que ignora regras).
+    // Assinantes — ID = telefone. Cadastro completo: só admin.
+    // Venda no balcão pelo barbeiro passa pela função venderAssinaturaBalcao.
     match /assinantes/{telefone} {
-      allow read: if isAdmin();
-      allow create: if isAdmin()
-        || (isAuthorized() && request.resource.data.origem == 'balcao');
-      allow update: if isAdmin()
-        || (isAuthorized() && resource.data.origem == 'balcao' && request.resource.data.origem == 'balcao');
-      allow delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
-    // Visão reduzida para barbeiros (nome, plano, status, vencimento, dependente): sem valores.
-    // Mantida pela função sincronizarAssinantePublico.
-    match /assinantes_publico/{telefone} {
+    // Visão reduzida para barbeiros (nome, plano, status, vencimento, dependente): sem telefone nem valores.
+    // ID = código do cliente. Mantida pela função sincronizarAssinantePublico.
+    match /assinantes_publico/{cid} {
       allow read: if isAuthorized();
       allow write: if false;
     }
@@ -86,7 +91,7 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Pagamentos da Celcoin — ID = {telefone}_{transacao_id}. Tem CPF/e-mail: só admin.
+    // Pagamentos da Celcoin — ID = {código}_{transacao_id}. Tem telefone, CPF e e-mail: só admin.
     match /pagamentos_assinatura/{docId} {
       allow read, write: if isAdmin();
     }

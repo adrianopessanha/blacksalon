@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { db, collection, query, where, getDocs, onSnapshot, orderBy, doc, deleteDoc, updateDoc } from '../firebase'
+import { carregarTelefones, cadastrarClienteBalcao } from '../hooks/useClientes'
+import { comTelefone } from '../utils/privado'
+import { normalizeTelefone55 } from '../utils/phone'
 import { Search, CreditCard, Phone, Calendar, User, TrendingUp, TrendingDown, Clock, ChevronDown, ChevronUp, Award, DollarSign, Wallet, Scissors, Pencil, Trash2, X, Check } from 'lucide-react'
 
 // ==========================================
@@ -20,16 +23,24 @@ export function GiftVoucherMonitor() {
     const [editForm, setEditForm] = useState({ nome: '', telefone: '' })
     const [deletingClient, setDeletingClient] = useState(null)
     const [actionLoading, setActionLoading] = useState(false)
+    // clientes_vale guarda o código do cliente; o telefone vem de clientes_privado (só admin)
+    const [telDe, setTelDe] = useState(() => new Map())
+    const recarregarTelefones = () => carregarTelefones().then(m => setTelDe(m.telDe)).catch(e => console.error('clientes_privado:', e))
+    useEffect(() => { recarregarTelefones() }, [])
 
     const handleEditSave = async () => {
         if (!editingClient || !editForm.nome.trim()) return
         setActionLoading(true)
         try {
             const clientRef = doc(db, 'clientes_vale', editingClient.id)
-            await updateDoc(clientRef, {
-                nome: editForm.nome.trim(),
-                telefone: editForm.telefone.trim()
-            })
+            const upd = { nome: editForm.nome.trim() }
+            const tel55 = normalizeTelefone55(editForm.telefone)
+            if (editForm.telefone.trim() && !tel55) throw new Error('telefone inválido (DDD + número)')
+            if (tel55 && tel55 !== editingClient.telefone) {
+                upd.cliente_id = (await cadastrarClienteBalcao({ nome: upd.nome, telefone: tel55 })).cliente_id
+            }
+            await updateDoc(clientRef, upd)
+            await recarregarTelefones()
             setEditingClient(null)
         } catch (e) {
             alert('Erro ao salvar: ' + e.message)
@@ -97,7 +108,7 @@ export function GiftVoucherMonitor() {
 
     // 3. Process Analytics
     const analytics = useMemo(() => {
-        const clientsData = clients.map(client => {
+        const clientsData = clients.map(c => comTelefone(c, telDe)).map(client => {
             const clientLanc = lancamentos.filter(l => 
                 l.cliente_nome?.toLowerCase().trim() === client.nome?.toLowerCase().trim()
             )
@@ -131,7 +142,7 @@ export function GiftVoucherMonitor() {
         }
 
         return { list: filtered, stats }
-    }, [clients, lancamentos, search])
+    }, [clients, lancamentos, search, telDe])
 
     if (loading && clients.length === 0) return <div className="p-10 text-center text-cyan-500 animate-pulse font-bold">Carregando dados dos vales...</div>
 

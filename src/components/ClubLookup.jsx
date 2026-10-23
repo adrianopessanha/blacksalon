@@ -1,7 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Search, UserCheck, UserX, RefreshCw, X, ShieldCheck, Users } from 'lucide-react'
 import { useSubscribers } from '../hooks/useSubscribers'
-import { buscarAssinantes } from '../utils/consultaClub'
+import { buscarAssinantes, ehBuscaPorTelefone } from '../utils/consultaClub'
+import { codigoDoTelefone } from '../hooks/useClientes'
+import { normalizeTelefone55 } from '../utils/phone'
 
 const COR = {
     Ativo: 'border-emerald-500/30 bg-emerald-950/5',
@@ -11,8 +13,24 @@ const COR = {
 export function ClubLookup() {
     const { subscribers, loading, error } = useSubscribers()
     const [search, setSearch] = useState('')
+    const [cidBusca, setCidBusca] = useState(null)
+    const [buscandoTel, setBuscandoTel] = useState(false)
 
-    const filtered = useMemo(() => buscarAssinantes(subscribers, search), [subscribers, search])
+    // Telefone completo: o servidor devolve só o código do cliente
+    const tel55 = ehBuscaPorTelefone(search) ? normalizeTelefone55(search) : ''
+    useEffect(() => {
+        setCidBusca(null)
+        if (!tel55) return
+        let cancelado = false
+        setBuscandoTel(true)
+        codigoDoTelefone(tel55)
+            .then(cid => { if (!cancelado) setCidBusca(cid) })
+            .catch(err => console.error('resolverCliente:', err))
+            .finally(() => { if (!cancelado) setBuscandoTel(false) })
+        return () => { cancelado = true }
+    }, [tel55])
+
+    const filtered = useMemo(() => buscarAssinantes(subscribers, search, cidBusca), [subscribers, search, cidBusca])
 
     return (
         <div className="space-y-4 pb-20">
@@ -28,7 +46,7 @@ export function ClubLookup() {
 
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 shadow-xl">
                 <p className="text-sm text-gray-400 mb-4">
-                    Pesquise pelo nome (ou parte dele) ou pelo telefone, com ou sem DDD.
+                    Pesquise pelo nome (ou parte dele) ou pelo telefone completo, com DDD.
                 </p>
                 <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
@@ -50,7 +68,8 @@ export function ClubLookup() {
             {error && <div className="bg-red-900/20 border border-red-800/50 rounded-xl p-4 text-red-400 text-sm">Erro ao carregar: {error}</div>}
 
             <div className="space-y-3">
-                {search.trim().length >= 2 && filtered.length === 0 && !loading && (
+                {buscandoTel && <div className="text-center text-sm text-gray-500">Buscando pelo telefone...</div>}
+                {search.trim().length >= 2 && filtered.length === 0 && !loading && !buscandoTel && (
                     <div className="bg-gray-900/50 border border-dashed border-gray-800 rounded-2xl p-10 text-center">
                         <UserX size={40} className="mx-auto text-gray-700 mb-3" />
                         <p className="text-gray-500 font-medium">Nenhum assinante encontrado para "{search}"</p>
@@ -60,7 +79,7 @@ export function ClubLookup() {
                 {filtered.map(c => {
                     const ativo = c.status === 'ativo'
                     return (
-                        <div key={c.telefone} className={`bg-gray-900 border rounded-2xl p-4 ${ativo ? COR.Ativo : COR.inativo}`}>
+                        <div key={c.cliente_id} className={`bg-gray-900 border rounded-2xl p-4 ${ativo ? COR.Ativo : COR.inativo}`}>
                             <div className="flex items-start justify-between gap-4">
                                 <div className="flex-1 min-w-0">
                                     <h3 className="text-lg font-bold text-white leading-tight">{c.name}</h3>

@@ -1,7 +1,7 @@
 const UM_DIA_MS = 24 * 60 * 60 * 1000;
 const RESERVA_MS = 15 * 60 * 1000;
 
-const TELEFONE_RE = /^55\d{10,11}$/;
+const { CID_RE } = require("./clienteId");
 // Só atendimento conta: venda/renovação de assinatura, vale, produto e movimentos financeiros não
 const TIPOS_SEM_ATENDIMENTO = ["venda_assinatura", "renovacao_celcoin", "venda_vale", "produto", "adiantamento", "fechamento_comissao"];
 
@@ -10,7 +10,7 @@ const ms = (v) => (v && typeof v.toMillis === "function" ? v.toMillis() : v inst
 // Retorna o motivo para NÃO agendar, ou null se pode agendar
 function motivoParaNaoEnviar(lanc, agoraMs) {
     if (!lanc) return "sem dados";
-    if (!TELEFONE_RE.test(String(lanc.cliente_telefone || ""))) return "telefone inválido";
+    if (!CID_RE.test(String(lanc.cliente_id || ""))) return "sem cliente identificado";
     if (lanc.tipo && (TIPOS_SEM_ATENDIMENTO.includes(lanc.tipo) || lanc.tipo !== "servico")) return `tipo ${lanc.tipo}`;
     const dataMs = ms(lanc.data);
     // Lançamento retroativo (mais de 1 dia atrás) não dispara pesquisa
@@ -45,11 +45,12 @@ function unidadeTexto(lojaId) {
     return null;
 }
 
-function montarPayload(lancamentoId, lanc) {
+// telefone vem de clientes_privado, lido só na hora do envio
+function montarPayload(lancamentoId, lanc, telefone) {
     const data = lanc.data?.toDate ? lanc.data.toDate() : new Date(ms(lanc.data) || Date.now());
     return {
         lancamentoId,
-        telefone: lanc.cliente_telefone,
+        telefone,
         nome: lanc.cliente_nome && lanc.cliente_nome !== "Não Informado" ? lanc.cliente_nome : null,
         barbeiro: String(lanc.barbeiro_nome || "").split(" ")[0] || null,
         servico: lanc.servico_descricao || null,
@@ -59,8 +60,8 @@ function montarPayload(lancamentoId, lanc) {
 }
 
 // Uma task por cliente por dia: evita 2 pesquisas quando o atendimento vira 2 lançamentos
-function idTarefa(telefone, date) {
-    return `pesquisa-${telefone}-${dataHoraSP(date).slice(0, 10).replace(/-/g, "")}`;
+function idTarefa(clienteId, date) {
+    return `pesquisa-${clienteId}-${dataHoraSP(date).slice(0, 10).replace(/-/g, "")}`;
 }
 
-module.exports = { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, dataHoraSP, idTarefa, TELEFONE_RE };
+module.exports = { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, dataHoraSP, idTarefa };

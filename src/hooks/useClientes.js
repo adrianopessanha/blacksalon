@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { db, auth, collection, query, where, onSnapshot, doc, setDoc, serverTimestamp } from '../firebase'
+import { db, auth, collection, query, where, onSnapshot, doc, getDocs, chamarFuncao } from '../firebase'
+import { mapasTelefone } from '../utils/privado'
 import { getDoc, Timestamp } from 'firebase/firestore'
 
 export function storeToUnidade(store) {
@@ -66,25 +67,26 @@ export function useIsAdmin() {
     return isAdmin
 }
 
+// Telefone digitado -> { cliente_id, nome } (null se não cadastrado).
+// O servidor guarda o telefone; o app só recebe o código do cliente.
 export async function buscarClientePorTelefone(tel55) {
-    const snap = await getDoc(doc(db, 'clientes', tel55))
-    return snap.exists() ? { id: snap.id, ...snap.data() } : null
+    const r = await chamarFuncao('resolverCliente', { telefone: tel55 })
+    return r.existe ? { cliente_id: r.cid, nome: r.nome } : null
 }
 
-// Cadastro balcão: só cria se não existir, para não sobrescrever dados do Make.
+// Só o código, mesmo sem cadastro em clientes (Consulta Club pelo telefone completo)
+export async function codigoDoTelefone(tel55) {
+    return (await chamarFuncao('resolverCliente', { telefone: tel55 })).cid
+}
+
+// Só admin: { telDe: código -> telefone, cidDe: telefone -> código }
+export async function carregarTelefones() {
+    const snap = await getDocs(collection(db, 'clientes_privado'))
+    return mapasTelefone(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+}
+
+// Cadastro balcão: só cria se não existir, para não sobrescrever dados do Booksy/Celcoin.
 export async function cadastrarClienteBalcao({ nome, telefone, unidade, barbeiro }) {
-    const existente = await buscarClientePorTelefone(telefone)
-    if (existente) return existente
-    const novo = {
-        nome: nome.trim(),
-        telefone,
-        unidade: unidade || null,
-        ultimo_barbeiro: barbeiro || null,
-        ultimo_agendamento: null,
-        origem: 'balcao',
-        criado_em: serverTimestamp(),
-        atualizado_em: serverTimestamp()
-    }
-    await setDoc(doc(db, 'clientes', telefone), novo)
-    return { id: telefone, ...novo }
+    const r = await chamarFuncao('resolverCliente', { telefone, nome: nome.trim(), unidade, barbeiro, criar: true })
+    return { cliente_id: r.cid, nome: r.nome }
 }

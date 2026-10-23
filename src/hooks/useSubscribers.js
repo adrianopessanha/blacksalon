@@ -3,7 +3,7 @@ import { db, collection, onSnapshot } from '../firebase'
 import { statusConsulta } from '../utils/consultaClub'
 
 // Assinantes para Lançamento e Consulta Club, a partir da visão reduzida
-// assinantes_publico/{telefone} (sem valores). Dependente segue o status do pagador.
+// assinantes_publico/{código do cliente} (sem telefone nem valores). Dependente segue o status do pagador.
 export function useSubscribers() {
     const [subscribers, setSubscribers] = useState([])
     const [loading, setLoading] = useState(true)
@@ -11,15 +11,15 @@ export function useSubscribers() {
 
     useEffect(() => {
         return onSnapshot(collection(db, 'assinantes_publico'), snap => {
-            const lista = snap.docs.map(d => {
-                const p = { telefone: d.id, ...d.data() }
+            // Só os documentos por código (c_...); os antigos com ID = telefone saem com as regras novas
+            const lista = snap.docs.filter(d => d.id.startsWith('c_')).map(d => {
+                const p = { cliente_id: d.id, ...d.data() }
                 const st = statusConsulta(p)
                 return {
                     ...p,
                     name: p.nome || '',
                     code: p.codigo_cliente || null,
                     plano: p.plano || '',
-                    phone: p.telefone,
                     status: st.ativo ? 'ativo' : 'inativo',
                     statusTexto: st.texto,
                     rawStatus: st.texto,

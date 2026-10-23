@@ -13,13 +13,44 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { calcularResumo, mesAnterior } = require("./resumo");
 const { getFunctions } = require("firebase-admin/functions");
 const { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
+const { cidDe, normalizarTelefone, TELEFONE_RE, CID_RE } = require("./clienteId");
+const { decidirVendaBalcao } = require("./balcao");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
 // Deve bater com o campo webhookSecret que o Make envia no corpo JSON
 const VALE_WEBHOOK_SECRET_NOVO = defineSecret("VALE_WEBHOOK_SECRET_NOVO");
+// Gera o código opaco do cliente (c_...) a partir do telefone
+const CLIENTE_ID_SECRET = defineSecret("CLIENTE_ID_SECRET");
 
 initializeApp();
 const db = getFirestore();
+
+// ==========================================
+// Telefone do cliente: só em clientes_privado/{código} (só admin lê).
+// Tudo o que o barbeiro lê usa o código (cliente_id).
+// ==========================================
+const codigoDe = (tel55) => cidDe(tel55, CLIENTE_ID_SECRET.value());
+const privadoRef = (cid) => db.collection("clientes_privado").doc(cid);
+const dadosPrivados = (telefone) => ({ telefone, atualizado_em: FieldValue.serverTimestamp() });
+
+// Lançamento novo traz cliente_id; o app antigo (ainda em cache) traz cliente_telefone
+function codigoDoLancamento(lanc) {
+    if (CID_RE.test(String(lanc?.cliente_id || ""))) return lanc.cliente_id;
+    return TELEFONE_RE.test(String(lanc?.cliente_telefone || "")) ? codigoDe(lanc.cliente_telefone) : null;
+}
+
+async function telefoneDoCodigo(cid) {
+    if (!CID_RE.test(String(cid || ""))) return null;
+    const snap = await privadoRef(cid).get();
+    return snap.exists ? snap.data().telefone || null : null;
+}
+
+// Hora de São Paulo nos avisos ao Make
+const dataBR = (d) => d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+const horaBR = (d) => d.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo" });
+const diaSP = (d) => d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+// Formato dos webhooks do Make: DDD + número, sem 55
+const telefoneMake = (tel55) => (tel55 ? String(tel55).replace(/^55/, "") : "");
 
 // ==========================================
 // BARBEIRO PADRÃO para vendas do site (Adriano - admin)
@@ -40,7 +71,7 @@ exports.webhookValePresente = onRequest(
         region: "southamerica-east1",
         maxInstances: 10,
         invoker: "public",
-        secrets: [VALE_WEBHOOK_SECRET_NOVO],
+        secrets: [VALE_WEBHOOK_SECRET_NOVO, CLIENTE_ID_SECRET],
     },
     async (req, res) => {
         // Apenas POST
@@ -114,15 +145,18 @@ exports.webhookValePresente = onRequest(
 
             // 5. Calcular valor por uso (4 créditos por pacote)
             const valorPorUso = parseFloat((amountBRL / 4).toFixed(2));
+            const tel55 = normalizarTelefone(clientPhone);
+            const cid = tel55 ? codigoDe(tel55) : null;
+            if (cid) await privadoRef(cid).set(dadosPrivados(tel55), { merge: true });
 
-            // 6. Registrar/atualizar cliente em clientes_vale
+            // 6. Registrar/atualizar cliente em clientes_vale (sem telefone)
             const clientKey = clientName.toLowerCase().trim();
             const clientRef = db.collection("clientes_vale").doc(clientKey);
 
             await clientRef.set(
                 {
                     nome: clientName.trim(),
-                    telefone: clientPhone.trim(),
+                    cliente_id: cid,
                     email: clientEmail.trim(),
                     cpf: clientTaxId,
                     valor_por_uso: valorPorUso,
@@ -141,7 +175,7 @@ exports.webhookValePresente = onRequest(
                 barbeiro_nome: DEFAULT_BARBER.name,
                 loja_id: DEFAULT_BARBER.store,
                 cliente_nome: clientName.trim(),
-                cliente_telefone: clientPhone.trim(),
+                cliente_id: cid,
                 servico_descricao: "Compra de pacote",
                 valor_bruto: amountBRL,
                 forma_pagamento: formaPagamento,
@@ -169,8 +203,8 @@ exports.webhookValePresente = onRequest(
                     valor: amountBRL,
                     barbeiro: DEFAULT_BARBER.name,
                     loja: DEFAULT_BARBER.store,
-                    data: now.toLocaleDateString("pt-BR"),
-                    hora: now.toLocaleTimeString("pt-BR"),
+                    data: dataBR(now),
+                    hora: horaBR(now),
                     data_hora_iso: now.toISOString(),
                     valor_pacote: amountBRL,
                     valor_por_visita: valorPorUso,
@@ -228,7 +262,7 @@ exports.registrarAgendamento = onRequest(
         region: "southamerica-east1",
         maxInstances: 10,
         invoker: "public",
-        secrets: [MAKE_SECRET],
+        secrets: [MAKE_SECRET, CLIENTE_ID_SECRET],
     },
     async (req, res) => {
         if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -240,14 +274,16 @@ exports.registrarAgendamento = onRequest(
         if (!ag.ok) return res.status(422).json({ error: "Dados insuficientes", motivos: ag.erros });
 
         try {
-            const agRef = db.collection("agendamentos").doc(ag.id);
-            const clienteRef = db.collection("clientes").doc(ag.telefone);
+            const cid = codigoDe(ag.telefone);
+            const agId = `${cid}_${ag.sufixo}`;
+            const agRef = db.collection("agendamentos").doc(agId);
+            const clienteRef = db.collection("clientes").doc(cid);
             const inicio = Timestamp.fromDate(ag.inicio);
 
             const novo = await db.runTransaction(async (tx) => {
                 const existente = await tx.get(agRef);
                 const dados = {
-                    telefone: ag.telefone,
+                    cliente_id: cid,
                     nome: ag.nome,
                     unidade: ag.unidade,
                     barbeiro: ag.barbeiro,
@@ -260,19 +296,19 @@ exports.registrarAgendamento = onRequest(
                 tx.set(agRef, dados, { merge: true });
                 tx.set(clienteRef, {
                     nome: ag.nome,
-                    telefone: ag.telefone,
                     unidade: ag.unidade,
                     ultimo_barbeiro: ag.barbeiro,
                     ultimo_agendamento: inicio,
                     origem: "booksy",
                     atualizado_em: FieldValue.serverTimestamp(),
                 }, { merge: true });
+                tx.set(privadoRef(cid), dadosPrivados(ag.telefone), { merge: true });
                 return !existente.exists;
             });
 
             return res.status(200).json({
                 success: true,
-                id: ag.id,
+                id: agId,
                 novo,
                 nome: ag.nome,
                 data: ag.data,
@@ -298,7 +334,7 @@ exports.registrarPagamentoAssinatura = onRequest(
         region: "southamerica-east1",
         maxInstances: 10,
         invoker: "public",
-        secrets: [MAKE_SECRET],
+        secrets: [MAKE_SECRET, CLIENTE_ID_SECRET],
     },
     async (req, res) => {
         if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -310,8 +346,11 @@ exports.registrarPagamentoAssinatura = onRequest(
         if (!p.ok) return res.status(422).json({ error: "Dados insuficientes", motivos: p.erros });
 
         try {
-            const pagRef = db.collection("pagamentos_assinatura").doc(p.id);
-            const clienteRef = db.collection("clientes").doc(p.telefone);
+            const cid = codigoDe(p.telefone);
+            // ID sem telefone: o lançamento guarda esse ID em pagamento_assinatura_id
+            const pagId = `${cid}_${p.sufixo}`;
+            const pagRef = db.collection("pagamentos_assinatura").doc(pagId);
+            const clienteRef = db.collection("clientes").doc(cid);
 
             const resultado = await db.runTransaction(async (tx) => {
                 const existente = await tx.get(pagRef);
@@ -325,7 +364,7 @@ exports.registrarPagamentoAssinatura = onRequest(
 
                 if (p.classe === "baixa_manual") {
                     const pendentes = await tx.get(db.collection("lancamentos")
-                        .where("cliente_telefone", "==", p.telefone)
+                        .where("cliente_id", "==", cid)
                         .where("tipo", "==", "renovacao_celcoin")
                         .where("status_celcoin", "==", "pendente"));
                     const escolhido = escolherCandidato(
@@ -339,7 +378,7 @@ exports.registrarPagamentoAssinatura = onRequest(
                         tx.update(db.collection("lancamentos").doc(escolhido.id), {
                             status_celcoin: "baixado",
                             transacao_id: p.transacaoId,
-                            pagamento_assinatura_id: p.id,
+                            pagamento_assinatura_id: pagId,
                             codigo_cliente: p.codigoCliente,
                             email: p.email,
                             documento: p.documento,
@@ -354,6 +393,7 @@ exports.registrarPagamentoAssinatura = onRequest(
                 tx.set(pagRef, {
                     transacao_id: p.transacaoId,
                     telefone: p.telefone,
+                    cliente_id: cid,
                     nome: p.nome,
                     valor: p.valor,
                     plano: p.plano,
@@ -380,6 +420,7 @@ exports.registrarPagamentoAssinatura = onRequest(
                 }
                 if (!cliente.exists && p.nome) upd.nome = p.nome;
                 tx.set(clienteRef, { ...upd, atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
+                tx.set(privadoRef(cid), dadosPrivados(p.telefone), { merge: true });
                 tx.set(db.collection("assinantes").doc(p.telefone), {
                     ...atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}, assinanteAtual.exists ? assinanteAtual.data().status_assinatura : null),
                     // Assinante novo da Celcoin: o 1º evento marca o início (define o dia do ciclo)
@@ -390,7 +431,7 @@ exports.registrarPagamentoAssinatura = onRequest(
                 return { duplicado: false, situacao, lancamento_id: lancamentoId };
             });
 
-            return res.status(200).json({ success: true, id: p.id, tipo: p.classe, ...resultado });
+            return res.status(200).json({ success: true, id: pagId, tipo: p.classe, ...resultado });
         } catch (error) {
             console.error("registrarPagamentoAssinatura:", error);
             return res.status(500).json({ error: "Internal server error" });
@@ -398,19 +439,21 @@ exports.registrarPagamentoAssinatura = onRequest(
     }
 );
 
-// Renovação lançada DEPOIS da baixa: liga à baixa sem lançamento do mesmo telefone
+// Renovação lançada DEPOIS da baixa: liga à baixa sem lançamento do mesmo cliente
 exports.vincularRenovacaoCelcoin = onDocumentCreated(
-    { document: "lancamentos/{id}", region: "southamerica-east1" },
+    { document: "lancamentos/{id}", region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
     async (event) => {
         const lanc = event.data?.data();
-        if (!lanc || lanc.tipo !== "renovacao_celcoin" || lanc.status_celcoin !== "pendente" || !lanc.cliente_telefone) return;
+        if (!lanc || lanc.tipo !== "renovacao_celcoin" || lanc.status_celcoin !== "pendente") return;
+        const cid = codigoDoLancamento(lanc);
+        if (!cid) return;
         const lancRef = event.data.ref;
 
         await db.runTransaction(async (tx) => {
             const atual = await tx.get(lancRef);
             if (!atual.exists || atual.data().status_celcoin !== "pendente") return;
             const baixas = await tx.get(db.collection("pagamentos_assinatura")
-                .where("telefone", "==", lanc.cliente_telefone)
+                .where("cliente_id", "==", cid)
                 .where("situacao", "==", "baixa_sem_lancamento"));
             const escolhido = escolherCandidato(
                 baixas.docs.map((d) => ({ id: d.id, valor: d.data().valor, dataMs: tsMs(d.data().data_pagamento), dados: d.data() })),
@@ -441,9 +484,11 @@ const PESQUISA_SECRET = defineSecret("PESQUISA_WEBHOOK_SECRET");
 const PESQUISA_URL = "https://hook.us1.make.com/1dcpfjyqxsj3vnehi7a3n23mvybsjrw4";
 
 exports.agendarPesquisaSatisfacao = onDocumentCreated(
-    { document: "lancamentos/{id}", region: "southamerica-east1" },
+    { document: "lancamentos/{id}", region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
     async (event) => {
-        const lanc = event.data?.data();
+        const dados = event.data?.data();
+        if (!dados) return;
+        const lanc = { ...dados, cliente_id: codigoDoLancamento(dados) };
         const agora = Date.now();
         const motivo = motivoParaNaoEnviar(lanc, agora);
         if (motivo) return;
@@ -451,8 +496,8 @@ exports.agendarPesquisaSatisfacao = onDocumentCreated(
         const fila = getFunctions().taskQueue("locations/southamerica-east1/functions/enviarPesquisaSatisfacao");
         try {
             await fila.enqueue(
-                { lancamentoId: event.params.id, telefone: lanc.cliente_telefone },
-                { scheduleDelaySeconds: 3600, id: idTarefa(lanc.cliente_telefone, new Date(agora)) }
+                { lancamentoId: event.params.id, clienteId: lanc.cliente_id },
+                { scheduleDelaySeconds: 3600, id: idTarefa(lanc.cliente_id, new Date(agora)) }
             );
         } catch (err) {
             // Mesmo cliente no mesmo dia (ex.: atendimento dividido em 2 lançamentos): já existe task
@@ -467,19 +512,23 @@ exports.enviarPesquisaSatisfacao = onTaskDispatched(
         region: "southamerica-east1",
         retryConfig: { maxAttempts: 3, minBackoffSeconds: 60 },
         rateLimits: { maxConcurrentDispatches: 5 },
-        secrets: [PESQUISA_SECRET],
+        secrets: [PESQUISA_SECRET, CLIENTE_ID_SECRET],
     },
     async (req) => {
-        const { lancamentoId, telefone } = req.data || {};
-        if (!lancamentoId || !telefone) return;
+        const { lancamentoId, clienteId } = req.data || {};
+        // Task enfileirada antes da troca para código ainda traz o telefone
+        const cid = clienteId || (TELEFONE_RE.test(String(req.data?.telefone || "")) ? codigoDe(req.data.telefone) : null);
+        if (!lancamentoId || !cid) return;
+        const telefone = await telefoneDoCodigo(cid);
+        if (!telefone) return;
 
         const lancRef = db.collection("lancamentos").doc(lancamentoId);
-        const clienteRef = db.collection("clientes").doc(telefone);
+        const clienteRef = db.collection("clientes").doc(cid);
 
         // Reserva o envio para não mandar duas pesquisas ao mesmo cliente ao mesmo tempo
         const lanc = await db.runTransaction(async (tx) => {
             const [l, c] = await Promise.all([tx.get(lancRef), tx.get(clienteRef)]);
-            if (!l.exists || l.data().cliente_telefone !== telefone) return null;
+            if (!l.exists || codigoDoLancamento(l.data()) !== cid) return null;
             if (l.data().pesquisaEnviadaEm) return null;
             const agora = Date.now();
             if (pesquisaHoje(c.data(), agora) || reservadaPorOutro(c.data(), lancamentoId, agora)) return null;
@@ -493,7 +542,7 @@ exports.enviarPesquisaSatisfacao = onTaskDispatched(
             resp = await fetch(PESQUISA_URL, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "x-pesquisa-secret": PESQUISA_SECRET.value() },
-                body: JSON.stringify(montarPayload(lancamentoId, lanc)),
+                body: JSON.stringify(montarPayload(lancamentoId, lanc, telefone)),
             });
         } catch (err) {
             resp = null;
@@ -565,13 +614,20 @@ exports.resumoMensalAssinaturas = onSchedule(
     }
 );
 
+// Chamáveis do app: só contas em usuarios/{uid}
+async function exigirUsuario(request) {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Faça login.");
+    const u = await db.collection("usuarios").doc(uid).get();
+    if (!u.exists) throw new HttpsError("permission-denied", "Usuário sem acesso.");
+    return { uid, admin: u.data().admin === true };
+}
+
 exports.recalcularResumoAssinaturas = onCall(
     { region: "southamerica-east1" },
     async (request) => {
-        const uid = request.auth?.uid;
-        if (!uid) throw new HttpsError("unauthenticated", "Faça login.");
-        const u = await db.collection("usuarios").doc(uid).get();
-        if (!u.exists || u.data().admin !== true) throw new HttpsError("permission-denied", "Só admin.");
+        const { admin } = await exigirUsuario(request);
+        if (!admin) throw new HttpsError("permission-denied", "Só admin.");
         const mes = String(request.data?.mes || "");
         if (!/^\d{4}-\d{2}$/.test(mes)) throw new HttpsError("invalid-argument", "Mês no formato AAAA-MM.");
         return await gerarResumo(mes, { usarAtivosAtuais: false });
@@ -602,31 +658,184 @@ exports.vencerAssinantesBalcao = onSchedule(
 );
 
 // ==========================================
-// Visão reduzida para os barbeiros: assinantes_publico/{telefone}
-// Atualiza a cada mudança no cadastro, inclusive os dependentes de um pagador
+// Visão reduzida para os barbeiros: assinantes_publico/{código do cliente}, sem telefone
+// Atualiza a cada mudança no cadastro, inclusive os dependentes de um pagador.
+// Também garante clientes_privado/{código} (cadastro feito à mão pelo admin).
 // ==========================================
 exports.sincronizarAssinantePublico = onDocumentWritten(
-    { document: "assinantes/{telefone}", region: "southamerica-east1" },
+    { document: "assinantes/{telefone}", region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
     async (event) => {
         const tel = event.params.telefone;
+        if (!TELEFONE_RE.test(tel)) return console.error("assinantes: ID fora do formato 55+DDD+número");
+        const cid = codigoDe(tel);
         const depois = event.data?.after;
-        const pubRef = db.collection("assinantes_publico").doc(tel);
-        const dependentes = await db.collection("assinantes").where("pagador", "==", tel).get();
+        const pubRef = db.collection("assinantes_publico").doc(cid);
+        const dependentes = (await db.collection("assinantes").where("pagador", "==", tel).get())
+            .docs.filter((d) => TELEFONE_RE.test(d.id));
+        const gravarPublico = (id, dados, pagador = null) => {
+            const c = codigoDe(id);
+            return db.collection("assinantes_publico").doc(c).set(visaoPublica({ ...dados, cliente_id: c }, pagador));
+        };
 
         if (!depois?.exists) {
             await pubRef.delete();
-            for (const d of dependentes.docs) await db.collection("assinantes_publico").doc(d.id).set(visaoPublica({ telefone: d.id, ...d.data() }));
+            for (const d of dependentes) await gravarPublico(d.id, d.data());
             return;
         }
-        const a = { telefone: tel, ...depois.data() };
+        await privadoRef(cid).set(dadosPrivados(tel), { merge: true });
+        const a = { ...depois.data(), cliente_id: cid };
         let pagador = null;
-        if (a.pagador) {
+        if (TELEFONE_RE.test(String(a.pagador || ""))) {
             const p = await db.collection("assinantes").doc(a.pagador).get();
-            if (p.exists) pagador = { telefone: p.id, ...p.data() };
+            if (p.exists) pagador = { ...p.data(), cliente_id: codigoDe(p.id) };
         }
         await pubRef.set(visaoPublica(a, pagador));
-        for (const d of dependentes.docs) {
-            await db.collection("assinantes_publico").doc(d.id).set(visaoPublica({ telefone: d.id, ...d.data() }, a));
+        for (const d of dependentes) await gravarPublico(d.id, d.data(), a);
+    }
+);
+
+// ==========================================
+// App antigo ainda em cache pode gravar telefone no lançamento: troca pelo código
+// ==========================================
+exports.removerTelefoneLancamento = onDocumentCreated(
+    { document: "lancamentos/{id}", region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
+    async (event) => {
+        const l = event.data?.data();
+        if (!l || (l.cliente_telefone === undefined && l.assinante_telefone === undefined)) return;
+        const upd = { cliente_telefone: FieldValue.delete(), assinante_telefone: FieldValue.delete() };
+        for (const [campoTel, campoId] of [["cliente_telefone", "cliente_id"], ["assinante_telefone", "assinante_id"]]) {
+            const tel55 = normalizarTelefone(l[campoTel]);
+            if (!tel55 || l[campoId]) continue;
+            upd[campoId] = codigoDe(tel55);
+            await privadoRef(upd[campoId]).set(dadosPrivados(tel55), { merge: true });
         }
+        await event.data.ref.update(upd);
+    }
+);
+
+// ==========================================
+// Chamáveis do app (barbeiro e admin)
+// ==========================================
+
+// Telefone digitado -> código e nome. Nunca devolve telefone.
+// criar: cadastra no balcão se ainda não existir (pede nome).
+exports.resolverCliente = onCall(
+    { region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
+    async (request) => {
+        await exigirUsuario(request);
+        const d = request.data || {};
+        const tel55 = normalizarTelefone(d.telefone);
+        if (!tel55) throw new HttpsError("invalid-argument", "Telefone inválido: informe DDD + número.");
+        const cid = codigoDe(tel55);
+        const ref = db.collection("clientes").doc(cid);
+        const snap = await ref.get();
+        if (snap.exists) {
+            await privadoRef(cid).set(dadosPrivados(tel55), { merge: true });
+            return { cid, nome: snap.data().nome || null, existe: true };
+        }
+        // Código sem cadastro: serve para achar o assinante na Consulta Club
+        if (!d.criar) return { cid, nome: null, existe: false };
+        const nome = String(d.nome || "").trim();
+        if (!nome) throw new HttpsError("invalid-argument", "Informe o nome do cliente.");
+        const batch = db.batch();
+        // Só cria: não sobrescreve dados do Booksy/Celcoin
+        batch.create(ref, {
+            nome,
+            unidade: d.unidade || null,
+            ultimo_barbeiro: d.barbeiro || null,
+            ultimo_agendamento: null,
+            origem: "balcao",
+            criado_em: FieldValue.serverTimestamp(),
+            atualizado_em: FieldValue.serverTimestamp(),
+        });
+        batch.set(privadoRef(cid), dadosPrivados(tel55), { merge: true });
+        try {
+            await batch.commit();
+        } catch (err) {
+            if (err.code !== 6) throw err; // 6 = ALREADY_EXISTS: cadastrado no mesmo instante por outro aparelho
+        }
+        return { cid, nome, existe: false };
+    }
+);
+
+const MAKE_ASSINATURA_URL = "https://hook.us1.make.com/qym41xlme1xcqlqcp4eekavzx53h9mut";
+const MAKE_VALE_URL = "https://hook.us1.make.com/foskacjnw4sc883k1r7m82dsc4nmuhk3";
+
+async function avisarMake(url, dados) {
+    try {
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dados) });
+        if (!r.ok) console.error("Make respondeu", r.status);
+    } catch (err) {
+        console.error("Make sem resposta:", err);
+    }
+}
+
+// Venda de assinatura no balcão: grava assinantes/{telefone} e avisa o Make.
+// O lançamento já foi gravado pelo app.
+exports.venderAssinaturaBalcao = onCall(
+    { region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
+    async (request) => {
+        const { admin } = await exigirUsuario(request);
+        const d = request.data || {};
+        const telefone = await telefoneDoCodigo(d.cliente_id);
+        if (!telefone) throw new HttpsError("failed-precondition", "Cliente sem telefone cadastrado.");
+        const nome = String(d.nome || "").trim();
+        const plano = String(d.plano || "").trim();
+        const valor = Number(d.valor);
+        if (!nome || !plano || !(valor > 0)) throw new HttpsError("invalid-argument", "Nome, plano e valor são obrigatórios.");
+
+        const agora = new Date();
+        const ref = db.collection("assinantes").doc(telefone);
+        const atual = await ref.get();
+        const r = decidirVendaBalcao({ atual: atual.exists ? atual.data() : null, admin, nome, telefone, plano, valor, hoje: diaSP(agora) });
+        if (r.upd) await ref.set({ ...r.upd, ultima_atualizacao: FieldValue.serverTimestamp() }, { merge: true });
+
+        const tel = telefoneMake(telefone);
+        await avisarMake(MAKE_ASSINATURA_URL, {
+            evento: "venda_assinatura",
+            cliente_nome: nome,
+            telefone: tel,
+            cliente_telefone: tel,
+            plano,
+            plano_id: d.plano_id || null,
+            valor,
+            status: "Paga fora do sistema",
+            barbeiro: d.barbeiro || null,
+            loja: d.loja || null,
+            forma_pagamento: d.forma_pagamento || null,
+            data: dataBR(agora),
+            hora: horaBR(agora),
+            data_hora_iso: agora.toISOString(),
+        });
+        return { resultado: r.resultado, origem: r.origem };
+    }
+);
+
+// Compra ou uso de vale no balcão: avisa o Make com o telefone lido aqui
+exports.notificarVale = onCall(
+    { region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
+    async (request) => {
+        await exigirUsuario(request);
+        const d = request.data || {};
+        if (!["compra_vale", "uso_vale"].includes(d.evento)) throw new HttpsError("invalid-argument", "Evento inválido.");
+        const tel = telefoneMake(await telefoneDoCodigo(d.cliente_id));
+        const agora = new Date();
+        const dados = {
+            evento: d.evento,
+            cliente_nome: String(d.cliente_nome || "").trim(),
+            telefone: tel,
+            cliente_telefone: tel,
+            valor: Number(d.valor) || 0,
+            barbeiro: d.barbeiro || null,
+            loja: d.loja || null,
+            data: dataBR(agora),
+            hora: horaBR(agora),
+            data_hora_iso: agora.toISOString(),
+        };
+        for (const k of ["valor_pacote", "valor_por_visita", "creditos", "saldo_restante", "servico"]) {
+            if (d[k] !== undefined) dados[k] = d[k];
+        }
+        await avisarMake(MAKE_VALE_URL, dados);
+        return { ok: true };
     }
 );

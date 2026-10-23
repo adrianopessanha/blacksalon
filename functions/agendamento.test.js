@@ -10,7 +10,7 @@ test("Márcia Dionízio — setembro, Unidade 1 pelo loja_email", () => {
         loja_email: "Black Salon Barbearia - Unidade 1",
     });
     assert.equal(r.ok, true);
-    assert.equal(r.id, "5521986207196_20260910_1830");
+    assert.equal(r.sufixo, "20260910_1830");
     assert.equal(r.nome, "Márcia Dionízio");
     assert.equal(r.data, "2026-09-10");
     assert.equal(r.hora, "18:30");
@@ -40,7 +40,7 @@ test("João Conceição — março com cedilha, dia/hora de 1 dígito, unidade p
         confirmacao: "Te esperamos com Wellington!",
     });
     assert.equal(r.ok, true);
-    assert.equal(r.id, "552122334455_20260307_0900");
+    assert.equal(r.sufixo, "20260307_0900");
     assert.equal(r.data, "2026-03-07");
     assert.equal(r.hora, "09:00");
     assert.equal(r.barbeiro, "Wellington");

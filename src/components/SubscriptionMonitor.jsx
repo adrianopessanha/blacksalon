@@ -7,6 +7,8 @@ import { getFunctions, httpsCallable } from 'firebase/functions'
 import { RefreshCw, Pencil, Check, X, TrendingUp, Users, Tag, Search, ArrowUp, ArrowDown, Minus } from 'lucide-react'
 import { TAXAS_ONLINE } from '../config/taxas'
 import { formatTelefone } from '../utils/phone'
+import { lancamentoComTelefone } from '../utils/privado'
+import { carregarTelefones } from '../hooks/useClientes'
 import {
     resultadoMes, situacaoAssinantes, porPlano, pontoTendencia, tendencia, naoLigados,
     CELCOIN_AUTO_DESDE, TAXA_MAQUININHA,
@@ -26,7 +28,7 @@ const docs = (s) => s.docs.map(d => ({ id: d.id, ...d.data() }))
 
 // Lê tudo uma vez (getDocs). Usado pela aba e, em parte, pelo Relatório.
 export async function carregarDadosAssinaturas() {
-    const [assin, atend, balcao, pags, conf, fin, resumos] = await Promise.all([
+    const [assin, atend, balcao, pags, conf, fin, resumos, { telDe, cidDe }] = await Promise.all([
         getDocs(collection(db, 'assinantes')),
         getDocs(query(collection(db, 'lancamentos'), where('forma_pagamento', '==', 'Assinante'))),
         getDocs(query(collection(db, 'lancamentos'), where('tipo', 'in', ['venda_assinatura', 'renovacao_celcoin']))),
@@ -34,6 +36,7 @@ export async function carregarDadosAssinaturas() {
         getDoc(doc(db, 'configuracoes', 'assinaturas_liquido_real')),
         getDocs(query(collection(db, 'financeiro'), where('finance_category', '==', 'receita_celcoin'))),
         getDocs(collection(db, 'resumos_assinatura')),
+        carregarTelefones(),
     ])
     const financeiroPorMes = {}
     for (const f of docs(fin)) {
@@ -43,7 +46,9 @@ export async function carregarDadosAssinaturas() {
     }
     return {
         assinantes: assin.docs.map(d => ({ telefone: d.id, ...d.data() })),
-        lancamentos: [...docs(atend), ...docs(balcao)],
+        // Lançamentos guardam o código do cliente; o telefone vem de clientes_privado (só admin)
+        lancamentos: [...docs(atend), ...docs(balcao)].map(l => lancamentoComTelefone(l, telDe)),
+        cidDe,
         pagamentos: docs(pags),
         lapis: conf.exists() ? conf.data() : {},
         financeiroPorMes,
@@ -147,7 +152,7 @@ export function SubscriptionMonitor() {
                                 className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 pl-8 pr-3 text-sm text-gray-200 outline-none focus:border-cyan-600" />
                         </div>
                         <div className="divide-y divide-gray-800 max-h-[32rem] overflow-y-auto">
-                            {lista.map(s => <LinhaAssinante key={s.telefone} s={s} assinantes={dados.assinantes} lancamentos={dados.lancamentos} onMudou={carregar} />)}
+                            {lista.map(s => <LinhaAssinante key={s.telefone} s={s} assinantes={dados.assinantes} lancamentos={dados.lancamentos} cidDe={dados.cidDe} onMudou={carregar} />)}
                             {lista.length === 0 && <div className="py-4 text-sm text-gray-500">Ninguém neste grupo.</div>}
                         </div>
                     </section>
@@ -376,7 +381,7 @@ const ROTULO_GRUPO = { pagou_nao_veio: 'pagou e não veio', recusado: 'cartão r
 
 const ROTULO_LIGACAO = { manual: 'vinculado à mão', telefone: 'telefone', codigo: 'código', nome: 'a conferir (só nome)' }
 
-function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
+function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
     const [aberto, setAberto] = useState(false)
     const [salvando, setSalvando] = useState(false)
     const destaque = s.grupos.includes('alertas') ? 'border-l-2 border-l-orange-500 bg-orange-950/10' : s.grupos.includes('recusado') ? 'border-l-2 border-l-yellow-500 bg-yellow-950/10' : ''
@@ -388,7 +393,11 @@ function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
         setSalvando(true)
         try { await fn(); onMudou() } catch (e) { alert('Erro: ' + e.message) } finally { setSalvando(false) }
     }
-    const vincular = (lancId) => salvar(() => updateDoc(doc(db, 'lancamentos', lancId), { assinante_telefone: s.telefone }))
+    const vincular = (lancId) => salvar(async () => {
+        const cid = cidDe.get(s.telefone)
+        if (!cid) throw new Error('assinante sem código de cliente')
+        await updateDoc(doc(db, 'lancamentos', lancId), { assinante_id: cid })
+    })
     const definirPagador = (tel) => salvar(() => updateDoc(doc(db, 'assinantes', s.telefone), { pagador: tel || null }))
 
     return (

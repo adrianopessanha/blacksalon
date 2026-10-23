@@ -38,19 +38,14 @@ export function statusConsulta(p, hoje = new Date()) {
     return { ...r, ativo: r.codigo === 'ativo', proximoVencimento: r.codigo === 'ativo' ? venc : null }
 }
 
-// Busca por telefone (com ou sem 55/DDD, parte do número) ou por parte do nome, sem acento/maiúscula
-export function buscarAssinantes(lista, termo) {
+// A lista não tem telefone: telefone completo vira código no servidor (cidDoTelefone)
+export const ehBuscaPorTelefone = (termo) => String(termo || '').replace(/\D/g, '').length >= 8
+
+// Busca por telefone completo (com ou sem 55/DDD) ou por parte do nome, sem acento/maiúscula
+export function buscarAssinantes(lista, termo, cidDoTelefone = null) {
     const t = String(termo || '').trim()
     if (t.length < 2) return []
-    const digitos = t.replace(/\D/g, '')
+    if (ehBuscaPorTelefone(t)) return cidDoTelefone ? lista.filter(p => p.cliente_id === cidDoTelefone) : []
     const nome = semAcento(t)
-    return lista.filter(p => {
-        if (digitos.length >= 4) {
-            const tel = String(p.telefone || '')
-            const local = tel.startsWith('55') ? tel.slice(2) : tel
-            const d = digitos.length >= 12 && digitos.startsWith('55') ? digitos.slice(2) : digitos
-            return local.includes(d) || local.slice(2).includes(d)
-        }
-        return semAcento(p.nome).includes(nome)
-    })
+    return lista.filter(p => semAcento(p.nome).includes(nome))
 }

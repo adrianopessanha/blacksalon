@@ -83,8 +83,8 @@ function parsePagamento(body) {
     const diaId = (dataStr || dataSP(new Date())).replace(/-/g, "");
     return {
         ok: true,
-        // Sem transação: um evento por tipo por dia (reenvio não duplica)
-        id: semTransacao ? `${telefone}_${classe}_${diaId}` : `${telefone}_${transacaoId}`,
+        // ID final: {código do cliente}_{sufixo}. Sem transação: um evento por tipo por dia (reenvio não duplica)
+        sufixo: semTransacao ? `${classe}_${diaId}` : transacaoId,
         telefone,
         transacaoId: transacaoId || null,
         semTransacao,
@@ -103,9 +103,9 @@ function parsePagamento(body) {
         dataStr,
     };
 }
-// Campos de clientes/{telefone} conforme o tipo de evento
+// Campos de clientes/{código} conforme o tipo de evento (sem telefone)
 function atualizacaoCliente(p) {
-    const base = { telefone: p.telefone, celcoin: true };
+    const base = { celcoin: true };
     if (p.classe === "cartao_aprovado" || p.classe === "baixa_manual") {
         return {
             ...base,

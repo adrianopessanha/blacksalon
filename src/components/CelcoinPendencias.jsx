@@ -3,6 +3,7 @@ import { db, collection, query, where, onSnapshot, doc } from '../firebase'
 import { writeBatch } from 'firebase/firestore'
 import { AlertTriangle, CheckCircle, Link2 } from 'lucide-react'
 import { formatTelefone } from '../utils/phone'
+import { carregarTelefones } from '../hooks/useClientes'
 
 const fmt = (v) => (parseFloat(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const fmtData = (ts) => ts?.toDate ? ts.toDate().toLocaleDateString('pt-BR') : '—'
@@ -32,6 +33,9 @@ export function usePendenciasCelcoin(ativo = true) {
 
 export function CelcoinPendencias() {
     const { pendentes, baixasSoltas, erro } = usePendenciasCelcoin()
+    // Lançamento guarda o código do cliente; o telefone vem de clientes_privado (só admin)
+    const [telDe, setTelDe] = useState(() => new Map())
+    useEffect(() => { carregarTelefones().then(m => setTelDe(m.telDe)).catch(e => console.error('clientes_privado:', e)) }, [])
 
     return (
         <div className="space-y-6 max-w-3xl mx-auto">
@@ -57,7 +61,7 @@ export function CelcoinPendencias() {
                             <div key={l.id} className="p-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                                 <div className="flex-1 min-w-[10rem]">
                                     <div className="text-gray-100 font-medium">{l.cliente_nome}</div>
-                                    <div className="text-xs text-gray-500">{formatTelefone(l.cliente_telefone)} · {l.plano || '—'}</div>
+                                    <div className="text-xs text-gray-500">{formatTelefone(telDe.get(l.cliente_id))} · {l.plano || '—'}</div>
                                 </div>
                                 <div className="text-gray-200 font-bold">{fmt(l.valor_bruto)}</div>
                                 <div className="text-xs text-gray-400">{l.forma_pagamento}</div>
@@ -74,8 +78,9 @@ export function CelcoinPendencias() {
 
 function BaixaSolta({ baixa, pendentes }) {
     const sugestoes = useMemo(() => {
-        const mesmoTel = pendentes.filter(l => l.cliente_telefone === baixa.telefone)
-        const mesmoValor = pendentes.filter(l => l.cliente_telefone !== baixa.telefone && Math.abs((parseFloat(l.valor_bruto) || 0) - (baixa.valor || 0)) < 0.01)
+        const mesmoCliente = (l) => !!l.cliente_id && l.cliente_id === baixa.cliente_id
+        const mesmoTel = pendentes.filter(mesmoCliente)
+        const mesmoValor = pendentes.filter(l => !mesmoCliente(l) && Math.abs((parseFloat(l.valor_bruto) || 0) - (baixa.valor || 0)) < 0.01)
         return [...mesmoTel, ...mesmoValor]
     }, [pendentes, baixa])
     const [escolhido, setEscolhido] = useState('')
@@ -124,7 +129,7 @@ function BaixaSolta({ baixa, pendentes }) {
                         className="flex-1 min-w-[12rem] bg-gray-950 border border-gray-700 rounded-lg px-2 py-1.5 text-gray-200 text-xs">
                         {sugestoes.map(l => (
                             <option key={l.id} value={l.id}>
-                                {l.cliente_telefone === baixa.telefone ? '★ ' : ''}{l.cliente_nome} · {fmt(l.valor_bruto)} · {fmtData(l.data)} · {l.barbeiro_nome}
+                                {l.cliente_id && l.cliente_id === baixa.cliente_id ? '★ ' : ''}{l.cliente_nome} · {fmt(l.valor_bruto)} · {fmtData(l.data)} · {l.barbeiro_nome}
                             </option>
                         ))}
                     </select>
