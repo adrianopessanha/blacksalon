@@ -99,8 +99,7 @@ function BaixaSolta({ baixa, pendentes }) {
                 transacao_id: baixa.transacao_id,
                 pagamento_assinatura_id: baixa.id,
                 codigo_cliente: baixa.codigo_cliente || null,
-                email: baixa.email || null,
-                documento: baixa.documento || null,
+                // E-mail e CPF ficam só no pagamento (só admin); o barbeiro lê lançamentos
             })
             batch.update(doc(db, 'pagamentos_assinatura', baixa.id), { situacao: 'vinculado', lancamento_id: lanc.id })
             await batch.commit()

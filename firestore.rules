@@ -44,10 +44,11 @@ service cloud.firestore {
       allow read, write: if isAuthorized();
     }
 
-    // Clientes do vale: sem telefone (fica em clientes_privado; o app grava cliente_id)
+    // Clientes do vale: sem telefone, e-mail ou CPF (ficam em clientes_privado; o app grava cliente_id)
     match /clientes_vale/{docId} {
       allow read, delete: if isAuthorized();
-      allow create, update: if isAuthorized() && !('telefone' in request.resource.data);
+      allow create, update: if isAuthorized()
+        && !request.resource.data.keys().hasAny(['telefone', 'email', 'cpf']);
     }
 
     match /fechamentos/{docId} {

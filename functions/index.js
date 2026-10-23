@@ -147,9 +147,14 @@ exports.webhookValePresente = onRequest(
             const valorPorUso = parseFloat((amountBRL / 4).toFixed(2));
             const tel55 = normalizarTelefone(clientPhone);
             const cid = tel55 ? codigoDe(tel55) : null;
-            if (cid) await privadoRef(cid).set(dadosPrivados(tel55), { merge: true });
+            // Telefone, e-mail e CPF só em clientes_privado (só admin). Sem telefone válido: documento pela cobrança.
+            const pessoais = { email: clientEmail.trim() || null, cpf: clientTaxId || null };
+            const idPrivado = cid || (billingId ? `vale_${String(billingId).replace(/\//g, "_")}` : null);
+            if (idPrivado) {
+                await privadoRef(idPrivado).set({ ...(cid ? dadosPrivados(tel55) : { atualizado_em: FieldValue.serverTimestamp() }), ...pessoais }, { merge: true });
+            }
 
-            // 6. Registrar/atualizar cliente em clientes_vale (sem telefone)
+            // 6. Registrar/atualizar cliente em clientes_vale (sem telefone, e-mail ou CPF)
             const clientKey = clientName.toLowerCase().trim();
             const clientRef = db.collection("clientes_vale").doc(clientKey);
 
@@ -157,8 +162,6 @@ exports.webhookValePresente = onRequest(
                 {
                     nome: clientName.trim(),
                     cliente_id: cid,
-                    email: clientEmail.trim(),
-                    cpf: clientTaxId,
                     valor_por_uso: valorPorUso,
                     valor_total: amountBRL,
                     origem: "site_vale_presente",
@@ -188,7 +191,6 @@ exports.webhookValePresente = onRequest(
                 webhook_dev_mode: isDevMode,
                 webhook_product_id: productExternalId,
                 webhook_payment_method: paymentMethod,
-                webhook_email: clientEmail,
             };
 
             const docRef = await db.collection("lancamentos").add(lancamento);
@@ -380,8 +382,7 @@ exports.registrarPagamentoAssinatura = onRequest(
                             transacao_id: p.transacaoId,
                             pagamento_assinatura_id: pagId,
                             codigo_cliente: p.codigoCliente,
-                            email: p.email,
-                            documento: p.documento,
+                            // E-mail e CPF ficam só no pagamento (só admin); o barbeiro lê lançamentos
                         });
                     } else {
                         situacao = "baixa_sem_lancamento";
@@ -466,8 +467,6 @@ exports.vincularRenovacaoCelcoin = onDocumentCreated(
                 transacao_id: escolhido.dados.transacao_id,
                 pagamento_assinatura_id: escolhido.id,
                 codigo_cliente: escolhido.dados.codigo_cliente || null,
-                email: escolhido.dados.email || null,
-                documento: escolhido.dados.documento || null,
             });
             tx.update(db.collection("pagamentos_assinatura").doc(escolhido.id), {
                 situacao: "vinculado",
