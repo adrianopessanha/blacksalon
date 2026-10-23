@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { taxaOnline } from '../config/taxas.js'
-import { entrou, comissoes, sobrou, atendimentos, porBarbeiro, vendasNaoServico, formasPagamento, aPagarSemana, monitorAssinaturas, periodoAnterior } from './relatorio.js'
+import { entrou, comissoes, sobrou, atendimentos, porBarbeiro, vendasNaoServico, formasPagamento, aPagarSemana, periodoAnterior } from './relatorio.js'
 
 const lojaDe = (d) => d.loja_id
 const S = (loja, forma, valor, com, extra = {}) => ({ tipo: 'servico', loja_id: loja, forma_pagamento: forma, valor_bruto: valor, comissao_barbeiro: com, barbeiro_id: extra.b || 'jonatas', barbeiro_nome: extra.b || 'jonatas', ...extra })
@@ -76,18 +76,6 @@ test('por barbeiro sem "resultado"; a pagar = comissão − adiantamentos', () =
     const p = aPagarSemana(dia)
     const w = p.find(x => x.id === 'wellington')
     assert.deepEqual([w.comissao, w.adiantamentos, w.aPagar], [0, 20, -20])
-})
-
-test('assinaturas: lucro = líquido − comissões de assinante; extrato e financeiro antigo substituem estimado', () => {
-    const pags = [{ receita: true, valor: 80 }, { receita: true, valor: 140 }]
-    const m = monitorAssinaturas(pags, dia, null, '2026-11')
-    assert.equal(m.bruto, 220)
-    assert.equal(m.taxas, 14.71)
-    assert.equal(m.liquido, 205.29)
-    assert.equal(m.lucro, 50.29)
-    assert.equal(monitorAssinaturas(pags, dia, '200', '2026-11').liquido, 200)
-    assert.equal(monitorAssinaturas([], dia, null, '2026-03', 9940).origemLiquido, 'financeiro')
-    assert.equal(monitorAssinaturas([], dia, null, '2026-11', 9940).origemLiquido, 'estimado')
 })
 
 test('período anterior: 1 dia -> mesma dia da semana anterior; intervalo -> mesmo tamanho', () => {

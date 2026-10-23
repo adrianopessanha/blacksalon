@@ -7,6 +7,9 @@ const { parseAgendamento } = require("./agendamento");
 const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato } = require("./assinatura");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onTaskDispatched } = require("firebase-functions/v2/tasks");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { calcularResumo, mesAnterior } = require("./resumo");
 const { getFunctions } = require("firebase-admin/functions");
 const { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
 
@@ -314,6 +317,8 @@ exports.registrarPagamentoAssinatura = onRequest(
                 if (existente.exists) return { duplicado: true, situacao: existente.data().situacao };
 
                 const cliente = await tx.get(clienteRef);
+                const assinanteAtual = await tx.get(db.collection("assinantes").doc(p.telefone));
+                const planosCelcoin = await tx.get(db.collection("configuracoes").doc("planos_celcoin"));
                 let situacao = "registrado";
                 let lancamentoId = null;
 
@@ -373,7 +378,9 @@ exports.registrarPagamentoAssinatura = onRequest(
                 if (!cliente.exists && p.nome) upd.nome = p.nome;
                 tx.set(clienteRef, { ...upd, atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
                 tx.set(db.collection("assinantes").doc(p.telefone), {
-                    ...atualizacaoAssinante(p),
+                    ...atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}),
+                    // Assinante novo da Celcoin: o 1º evento marca o início (define o dia do ciclo)
+                    ...(assinanteAtual.exists && assinanteAtual.data().inicio_contrato ? {} : { inicio_contrato: p.dataStr || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }) }),
                     ultima_atualizacao: FieldValue.serverTimestamp(),
                 }, { merge: true });
 
@@ -504,5 +511,66 @@ exports.enviarPesquisaSatisfacao = onTaskDispatched(
         }, { merge: true });
         batch.update(lancRef, { pesquisaEnviadaEm: FieldValue.serverTimestamp() });
         await batch.commit();
+    }
+);
+
+// ==========================================
+// Resumo mensal de assinaturas (resumos_assinatura/{AAAA-MM})
+// ==========================================
+async function gerarResumo(mes, { usarAtivosAtuais }) {
+    const [y, m] = mes.split("-").map(Number);
+    const ini = new Date(`${mes}-01T00:00:00-03:00`);
+    const fim = new Date(new Date(y, m, 1).toLocaleDateString("en-CA") + "T00:00:00-03:00");
+    const [assin, lanc, pags, conf, fin, atual] = await Promise.all([
+        db.collection("assinantes").get(),
+        db.collection("lancamentos").where("data", ">=", Timestamp.fromDate(ini)).where("data", "<", Timestamp.fromDate(fim)).get(),
+        db.collection("pagamentos_assinatura").where("data", ">=", `${mes}-01`).where("data", "<=", `${mes}-31`).get(),
+        db.collection("configuracoes").doc("assinaturas_liquido_real").get(),
+        db.collection("financeiro").where("finance_category", "==", "receita_celcoin").get(),
+        db.collection("resumos_assinatura").doc(mes).get(),
+    ]);
+    const assinantes = assin.docs.map((d) => d.data());
+    const financeiro = fin.docs.map((d) => d.data())
+        .filter((f) => f.status !== "provisionado" && (f.competence_month === mes || String(f.date || "").startsWith(mes)))
+        .reduce((s, f) => s + (parseFloat(f.amount) || 0), 0);
+    const lapis = conf.exists ? conf.data()[mes] : null;
+    // Ativos no fim do mês só existe no momento em que o mês fecha; ao recalcular, mantém o valor gravado
+    const ativos = usarAtivosAtuais
+        ? assinantes.filter((a) => a.status_assinatura === "ativa").length
+        : (atual.exists ? atual.data().ativos ?? null : null);
+    const resumo = calcularResumo({
+        mes, assinantes, ativos,
+        lancamentosMes: lanc.docs.map((d) => d.data()),
+        pagamentos: pags.docs.map((d) => d.data()),
+        liquidoReal: lapis ?? null,
+        liquidoFinanceiro: financeiro > 0 ? financeiro : null,
+    });
+    await db.collection("resumos_assinatura").doc(mes).set({
+        ...resumo,
+        gerado_em: FieldValue.serverTimestamp(),
+        ...(usarAtivosAtuais ? {} : { recalculado_em: FieldValue.serverTimestamp() }),
+    }, { merge: true });
+    return resumo;
+}
+
+exports.resumoMensalAssinaturas = onSchedule(
+    { schedule: "0 3 1 * *", timeZone: "America/Sao_Paulo", region: "southamerica-east1" },
+    async () => {
+        const mes = mesAnterior(new Date());
+        const r = await gerarResumo(mes, { usarAtivosAtuais: true });
+        console.log("resumo de assinaturas gravado", mes, JSON.stringify(r));
+    }
+);
+
+exports.recalcularResumoAssinaturas = onCall(
+    { region: "southamerica-east1" },
+    async (request) => {
+        const uid = request.auth?.uid;
+        if (!uid) throw new HttpsError("unauthenticated", "Faça login.");
+        const u = await db.collection("usuarios").doc(uid).get();
+        if (!u.exists || u.data().admin !== true) throw new HttpsError("permission-denied", "Só admin.");
+        const mes = String(request.data?.mes || "");
+        if (!/^\d{4}-\d{2}$/.test(mes)) throw new HttpsError("invalid-argument", "Mês no formato AAAA-MM.");
+        return await gerarResumo(mes, { usarAtivosAtuais: false });
     }
 );

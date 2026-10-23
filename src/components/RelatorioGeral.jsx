@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { db, collection, query, where, getDocs, doc, setDoc } from '../firebase'
 import { Timestamp, getDoc } from 'firebase/firestore'
-import { Wallet, Users, PiggyBank, Scissors, ShoppingBag, CreditCard, Star, Pencil, Check, X, CalendarClock, TrendingUp, TrendingDown } from 'lucide-react'
+import { Wallet, Users, PiggyBank, Scissors, ShoppingBag, CreditCard, Star, CalendarClock, TrendingUp, TrendingDown } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
-import { TAXAS_ONLINE } from '../config/taxas'
 import {
     LOJAS, FORMAS_CAIXA, entrou, comissoes, sobrou, atendimentos, porBarbeiro, vendasNaoServico,
-    formasPagamento, aPagarSemana, monitorAssinaturas, periodoAnterior, inicioDaSemana, CELCOIN_AUTO_DESDE,
+    formasPagamento, aPagarSemana, periodoAnterior, inicioDaSemana,
 } from '../utils/relatorio'
+import { resultadoMes, CELCOIN_AUTO_DESDE } from '../utils/assinaturas'
+import { ResultadoMes } from './SubscriptionMonitor'
 
 const fmt = (v) => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const NOME_LOJA = { 'loja-01': 'Loja 01', 'loja-02': 'Loja 02', total: 'Total' }
@@ -255,9 +256,6 @@ function MonitorAssinaturas({ filters }) {
     const umDia = filters.startDate === filters.endDate
     const [aberto, setAberto] = useState(!umDia)
     const [dados, setDados] = useState(null)
-    const [editando, setEditando] = useState(false)
-    const [valorEdit, setValorEdit] = useState('')
-    const [salvando, setSalvando] = useState(false)
 
     useEffect(() => { setAberto(!umDia) }, [umDia])
 
@@ -265,73 +263,46 @@ function MonitorAssinaturas({ filters }) {
         const [y, m] = mes.split('-').map(Number)
         const ini = new Date(y, m - 1, 1), fim = new Date(y, m, 1)
         const ultimoDia = `${mes}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
-        const [pag, lanc, conf, fin] = await Promise.all([
+        const [pag, lanc, conf, fin, assin] = await Promise.all([
             pagamentosEntre(`${mes}-01`, ultimoDia),
             lancamentosEntre(ini, fim),
             getDoc(doc(db, 'configuracoes', 'assinaturas_liquido_real')),
             mes < CELCOIN_AUTO_DESDE ? getDocs(query(collection(db, 'financeiro'), where('finance_category', '==', 'receita_celcoin'))) : null,
+            getDocs(collection(db, 'assinantes')),
         ])
         const antigo = fin ? fin.docs.map(d => d.data())
             .filter(d => d.status !== 'provisionado' && (d.competence_month === mes || String(d.date || '').startsWith(mes)))
             .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0) : 0
-        setDados({ pag, lanc, liquidoReal: conf.exists() ? conf.data()[mes] ?? null : null, liquidoAntigo: fin && antigo > 0 ? antigo : null })
+        setDados({ assinantes: assin.docs.map(d => ({ telefone: d.id, ...d.data() })), pag, lanc, lapis: conf.exists() ? conf.data()[mes] ?? null : null, financeiro: fin && antigo > 0 ? antigo : null })
     }
 
     useEffect(() => { if (aberto) { setDados(null); carregar().catch(e => console.error('assinaturas mês:', e)) } }, [aberto, mes]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    const m = dados && monitorAssinaturas(dados.pag, dados.lanc, dados.liquidoReal, mes, dados.liquidoAntigo)
+    // Mesma função da aba Assinaturas: o número aqui tem que ser igual ao de lá
+    const res = dados && resultadoMes({ mes, pagamentos: dados.pag, lancamentos: dados.lanc, assinantes: dados.assinantes, liquidoReal: dados.lapis, liquidoFinanceiro: dados.financeiro })
     const [y, mm] = mes.split('-')
     const nomeMes = `${MESES[Number(mm) - 1]}/${y}`
 
-    const salvar = async () => {
-        setSalvando(true)
-        try {
-            const v = valorEdit.trim() === '' ? null : parseFloat(valorEdit.replace(/\./g, '').replace(',', '.'))
-            await setDoc(doc(db, 'configuracoes', 'assinaturas_liquido_real'), { [mes]: Number.isFinite(v) ? v : null }, { merge: true })
-            setDados(d => ({ ...d, liquidoReal: Number.isFinite(v) ? v : null }))
-            setEditando(false)
-        } catch (e) { alert('Erro ao salvar: ' + e.message) } finally { setSalvando(false) }
+    const salvarLapis = async (valor) => {
+        await setDoc(doc(db, 'configuracoes', 'assinaturas_liquido_real'), { [mes]: valor }, { merge: true })
+        setDados(d => ({ ...d, lapis: valor }))
     }
 
     return (
-        <Secao icone={Star} cor="text-purple-400" titulo={`Assinaturas — mês da cobrança (${nomeMes})`}>
+        <Secao icone={Star} cor="text-purple-400" titulo={`Assinaturas — ${nomeMes}`}>
             {!aberto ? (
                 <button type="button" onClick={() => setAberto(true)} className="text-sm text-purple-300 underline">
                     Assinatura é cobrada por mês: veja o mês de {nomeMes}
                 </button>
-            ) : !m ? <div className="text-sm text-gray-500">Calculando...</div> : (
-                <div className="space-y-1.5 text-sm max-w-md">
-                    <Linha rotulo={`Cobrado online (bruto) · ${m.cobrancas} cobrança(s)`} valor={m.bruto} />
-                    <Linha rotulo="Taxas estimadas" valor={-m.taxas} cor="text-red-300" />
-                    <Linha rotulo="Líquido estimado" valor={m.liquidoEstimado} cor={m.usandoReal ? 'text-gray-500 line-through' : ''} />
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-gray-300">Líquido real (extrato){m.origemLiquido === 'financeiro' ? ' · digitado no Financeiro' : ''}</span>
-                        {editando ? (
-                            <span className="flex items-center gap-1">
-                                <input autoFocus inputMode="decimal" value={valorEdit} onChange={e => setValorEdit(e.target.value)}
-                                    className="w-28 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-right text-gray-100" placeholder="vazio = estimado" />
-                                <button type="button" onClick={salvar} disabled={salvando} className="text-emerald-400 p-1" aria-label="Salvar"><Check size={16} /></button>
-                                <button type="button" onClick={() => setEditando(false)} className="text-gray-500 p-1" aria-label="Cancelar"><X size={16} /></button>
-                            </span>
-                        ) : (
-                            <span className="flex items-center gap-2">
-                                <span className="text-gray-100">{m.usandoReal ? fmt(m.liquido) : '—'}</span>
-                                <button type="button" onClick={() => { setValorEdit(dados.liquidoReal ?? ''); setEditando(true) }} className="text-gray-400 hover:text-purple-300" aria-label="Editar líquido real"><Pencil size={14} /></button>
-                            </span>
-                        )}
-                    </div>
-                    <Linha rotulo={`Comissões de atendimento de assinante · ${m.atendimentosAssinante}`} valor={-m.comissoesAssinante} cor="text-red-300" />
-                    <div className="pt-1 border-t border-gray-800"><Linha rotulo="Lucro" valor={m.lucro} forte cor={m.lucro >= 0 ? 'text-emerald-400' : 'text-red-400'} /></div>
-                    <p className="text-[11px] text-gray-500 pt-1">
-                        Taxa estimada por cobrança: {(TAXAS_ONLINE.percentual * 100).toFixed(2).replace('.', ',')}% + {fmt(TAXAS_ONLINE.fixo)} + {(TAXAS_ONLINE.antecipacao * 100).toFixed(0)}% (antecipação), arredondada para cima.
-                        Assinatura no balcão no mês: {fmt(m.balcao)} ({m.balcaoQtd}) — já está no caixa das lojas.
-                    </p>
+            ) : !res ? <div className="text-sm text-gray-500">Calculando...</div> : (
+                <div className="space-y-2">
+                    <ResultadoMes res={res} mes={mes} lapis={dados.lapis} onSalvarLapis={salvarLapis} compacto />
+                    <a href="#/assinaturas" className="inline-block text-sm text-purple-300 underline">Ver detalhes na aba Assinaturas →</a>
                 </div>
             )}
         </Secao>
     )
 }
-
 function Secao({ icone: Icone, cor, titulo, children }) {
     return (
         <section className="bg-gray-900 border border-gray-800 rounded-2xl p-4 sm:p-5">

@@ -1,5 +1,4 @@
 // Cálculos da aba Relatórios. Não muda nenhuma regra de comissão: só lê comissao_barbeiro.
-import { taxaOnline } from '../config/taxas.js'
 
 export const FORMAS_CAIXA = ['Dinheiro', 'Pix', 'Débito', 'Crédito']
 export const LOJAS = ['loja-01', 'loja-02']
@@ -158,32 +157,6 @@ export function aPagarSemana(lancamentosSemana) {
     return Object.values(map)
         .map(b => ({ ...b, comissao: r2(b.comissao), adiantamentos: r2(b.adiantamentos), aPagar: r2(b.comissao - b.adiantamentos) }))
         .sort((a, b) => b.aPagar - a.aPagar)
-}
-
-// Até este mês a receita Celcoin era digitada à mão no Financeiro e vale como líquido real
-export const CELCOIN_AUTO_DESDE = '2026-11'
-
-// 8. Assinaturas no mês da cobrança. liquidoReal: digitado no lápis; liquidoAntigo: Financeiro (até out/2026)
-export function monitorAssinaturas(pagamentosMes, lancamentosMes, liquidoReal, mes, liquidoAntigo = null) {
-    const online = pagamentosMes.filter(p => p.receita)
-    const bruto = r2(online.reduce((s, p) => s + n(p.valor), 0))
-    const taxas = r2(online.reduce((s, p) => s + taxaOnline(p.valor), 0))
-    const liquidoEstimado = r2(bruto - taxas)
-    const digitado = liquidoReal != null && liquidoReal !== ''
-    const antigo = !digitado && mes < CELCOIN_AUTO_DESDE && liquidoAntigo != null
-    const temReal = digitado || antigo
-    const liquido = digitado ? r2(n(liquidoReal)) : antigo ? r2(n(liquidoAntigo)) : liquidoEstimado
-    const balcaoItens = lancamentosMes.filter(d => ['venda_assinatura', 'renovacao_celcoin'].includes(d.tipo) && !ehOnline(d) && FORMAS_CAIXA.includes(d.forma_pagamento))
-    const balcao = r2(balcaoItens.reduce((s, d) => s + n(d.valor_bruto), 0))
-    const atendAssin = lancamentosMes.filter(d => ehAtendimento(d) && d.forma_pagamento === 'Assinante')
-    const comissoesAssinante = r2(atendAssin.reduce((s, d) => s + n(d.comissao_barbeiro), 0))
-    return {
-        cobrancas: online.length, bruto, taxas, liquidoEstimado, liquido, usandoReal: temReal,
-        origemLiquido: digitado ? 'extrato' : antigo ? 'financeiro' : 'estimado',
-        balcao, balcaoQtd: balcaoItens.length, // informativo: já está no caixa das lojas
-        atendimentosAssinante: atendAssin.length, comissoesAssinante,
-        lucro: r2(liquido - comissoesAssinante),
-    }
 }
 
 // Período anterior para comparação: 1 dia -> mesmo dia da semana anterior; intervalo -> mesmo tamanho antes

@@ -57,7 +57,7 @@ test("clientes: ativa, recusado, cancelada", () => {
 });
 
 test("422: sem transacao_id ou telefone inválido", () => {
-    assert.equal(parsePagamento({ ...base, transacao_id: "" }).ok, false);
+    assert.equal(parsePagamento({ ...base, transacao_id: "", status: "" }).ok, false);
     assert.equal(parsePagamento({ ...base, telefone: "21986207196" }).ok, false);
 });
 
@@ -99,4 +99,27 @@ test("assinantes: status por tipo de evento, origem celcoin, sem CPF/e-mail", ()
     assert.equal(a.documento, undefined);
     assert.equal(atualizacaoAssinante(parsePagamento({ ...base, status: "Estornada" })).status_assinatura, "inativa");
     assert.equal(atualizacaoAssinante(parsePagamento({ ...base, status: "Negada na Operadora" })).status_assinatura, "pagamento_recusado");
+});
+
+test("evento sem transação: cancelamento e assinatura nova, com data; reenvio no mesmo dia tem o mesmo id", () => {
+    const c = parsePagamento({ telefone: "5521986207196", status: "Cancelada ao cancelar a cobrança", data: "2026-11-03 10:00:00" });
+    assert.equal(c.ok, true);
+    assert.equal(c.classe, "cancelada");
+    assert.equal(c.id, "5521986207196_cancelada_20261103");
+    const a = atualizacaoAssinante(c);
+    assert.equal(a.status_assinatura, "cancelada");
+    assert.equal(a.data_cancelamento, "2026-11-03");
+    const n = parsePagamento({ telefone: "5521986207196", evento: "nova", nome: "Novo", data: "2026-11-04" });
+    assert.equal(n.classe, "nova");
+    assert.equal(atualizacaoAssinante(n).status_assinatura, "aguardando_pagamento");
+    assert.equal(atualizacaoAssinante(n).data_adesao, "2026-11-04");
+});
+
+test("planMyId: usa a tabela código → plano; sem tabela, mantém o nome que veio e guarda o código", () => {
+    const p = parsePagamento({ ...base, status: "Capturada na Operadora", planMyId: "PLN-140", plano: "plano cabelo e barba ilimitado" });
+    assert.equal(p.planoId, "PLN-140");
+    assert.equal(atualizacaoAssinante(p, { "PLN-140": "Cabelo e Barba" }).plano, "Cabelo e Barba");
+    const sem = atualizacaoAssinante(p, {});
+    assert.equal(sem.plano, "plano cabelo e barba ilimitado");
+    assert.equal(sem.plano_id, "PLN-140");
 });

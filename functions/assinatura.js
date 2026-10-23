@@ -47,37 +47,55 @@ function classificar(status, pagoFora) {
     return "outro";
 }
 
+// Evento de contrato sem cobrança: "nova" (assinatura criada) ou o que o status disser
+function classificarSemTransacao(evento, status) {
+    const e = String(evento || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    if (["nova", "criada", "assinatura_nova"].includes(e)) return "nova";
+    if (["cancelada", "cancelamento"].includes(e)) return "cancelada";
+    if (["recusada", "recusado"].includes(e)) return "recusado";
+    const c = classificar(status, false);
+    if (c !== "outro") return c;
+    const s = String(status || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    return /nova|criad|aguardando|pendente|ativ/.test(s) ? "nova" : "outro";
+}
+
 function parsePagamento(body) {
     const b = body || {};
     const telefone = String(b.telefone || "").replace(/\D/g, "");
     const transacaoId = String(b.transacao_id || "").trim();
     const erros = [];
     if (!/^55\d{10,11}$/.test(telefone)) erros.push("telefone ausente ou fora do formato 55+DDD+número");
-    if (!transacaoId) erros.push("transacao_id ausente");
+    if (!transacaoId && !String(b.status || b.evento || "").trim()) erros.push("sem transacao_id é preciso mandar status ou evento");
     if (erros.length) return { ok: false, erros };
 
     const pagoFora = parseBool(b.pago_fora);
     const data = parseData(b.data);
+    const dataStr = data ? dataSP(data) : null;
+    const semTransacao = !transacaoId;
+    const classe = semTransacao ? classificarSemTransacao(b.evento, b.status) : classificar(b.status, pagoFora);
+    const diaId = (dataStr || dataSP(new Date())).replace(/-/g, "");
     return {
         ok: true,
-        id: `${telefone}_${transacaoId}`,
+        // Sem transação: um evento por tipo por dia (reenvio não duplica)
+        id: semTransacao ? `${telefone}_${classe}_${diaId}` : `${telefone}_${transacaoId}`,
         telefone,
-        transacaoId,
+        transacaoId: transacaoId || null,
+        semTransacao,
         nome: String(b.nome || "").trim() || null,
         // O Make já converte para reais; "valor" nunca é dividido aqui
         valor: parseValor(b.valor),
         plano: String(b.plano || "").trim() || null,
-        status: String(b.status || "").trim() || null,
+        planoId: String(b.planMyId || b.plano_id || b["Subscription.planMyId"] || "").trim() || null,
+        status: String(b.status || b.evento || "").trim() || null,
         pagoFora,
-        classe: classificar(b.status, pagoFora),
+        classe,
         codigoCliente: String(b.codigo_cliente || "").trim() || null,
         email: String(b.email || "").trim() || null,
         documento: String(b.documento || "").trim() || null,
         dataPagamento: data,
-        dataStr: data ? dataSP(data) : null,
+        dataStr,
     };
 }
-
 // Campos de clientes/{telefone} conforme o tipo de evento
 function atualizacaoCliente(p) {
     const base = { telefone: p.telefone, celcoin: true };
@@ -100,24 +118,31 @@ const STATUS_ASSINANTE = {
     baixa_manual: "ativa",
     recusado: "pagamento_recusado",
     cancelada: "cancelada",
+    nova: "aguardando_pagamento", // assinatura criada, ainda sem cobrança aprovada
     outro: "inativa", // Estornada, Expirada
 };
 
-// Campos de assinantes/{telefone}; só inclui nome/plano/valor quando vierem
-function atualizacaoAssinante(p) {
+const DATA_DO_EVENTO = { cancelada: "data_cancelamento", recusado: "data_recusa", nova: "data_adesao" };
+
+// Campos de assinantes/{telefone}; só inclui nome/plano/valor quando vierem.
+// planoMapa: configuracoes/planos_celcoin ({ planMyId: "Nome do plano" })
+function atualizacaoAssinante(p, planoMapa = {}) {
     const upd = {
         telefone: p.telefone,
         origem: "celcoin",
         status_assinatura: STATUS_ASSINANTE[p.classe],
         status_original: p.status,
-        codigo_cliente: p.codigoCliente,
+        data_ultimo_evento: p.dataStr || null,
     };
+    if (p.codigoCliente) upd.codigo_cliente = p.codigoCliente;
+    if (DATA_DO_EVENTO[p.classe]) upd[DATA_DO_EVENTO[p.classe]] = p.dataStr || null;
     if (p.nome) upd.nome = p.nome;
-    if (p.plano) upd.plano = p.plano;
+    const planoDoCodigo = p.planoId ? planoMapa[p.planoId] : null;
+    if (planoDoCodigo || p.plano) upd.plano = planoDoCodigo || p.plano;
+    if (p.planoId) upd.plano_id = p.planoId;
     if (p.valor != null) upd.valor = p.valor;
     return upd;
 }
-
 // candidatos: [{ id, valor, dataMs }]. Só os dos últimos 7 dias; prefere valor igual, depois o mais recente.
 function escolherCandidato(candidatos, valor, agoraMs) {
     const recentes = candidatos.filter((c) => c.dataMs != null && agoraMs - c.dataMs <= SETE_DIAS_MS && c.dataMs - agoraMs <= SETE_DIAS_MS);

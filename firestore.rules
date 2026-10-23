@@ -73,6 +73,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Resumo mensal de assinaturas: gravado só pelas funções (Admin SDK)
+    match /resumos_assinatura/{mes} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // Pagamentos da Celcoin — ID = {telefone}_{transacao_id}. Tem CPF/e-mail: só admin.
     match /pagamentos_assinatura/{docId} {
       allow read, write: if isAdmin();
