@@ -36,29 +36,36 @@ function dataSP(date) {
     return date.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
 }
 
-// Textos reais da Celcoin: "Capturada na Operadora", "Paga fora do sistema",
-// "Negada na Operadora", "Cancelada ao cancelar a cobrança", "Estornada", "Expirada".
-function classificar(status, pagoFora) {
-    const s = String(status || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const normalizar = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+
+// Status da Celcoin (cobrança, em português) e do contrato (Subscription.status, em inglês).
+// Classes: baixa_manual, cartao_aprovado, recusado, cancelada (CONTRATO), cobranca_cancelada
+// (só a cobrança), nova (aguardando pagamento), contrato_ativo, outro (estornada/expirada),
+// evento (desconhecido: só registra, não muda o assinante).
+function classificar(status, pagoFora, semTransacao = false) {
+    const s = normalizar(status).replace(/[_-]/g, " ");
     if (pagoFora || s.includes("paga fora")) return "baixa_manual";
-    if (/capturad|aprovad/.test(s)) return "cartao_aprovado";
-    if (s.includes("cancelad")) return "cancelada";
-    if (/negad|recusad|erro|falh/.test(s)) return "recusado";
-    return "outro";
+    if (/capturad|aprovad|\bpaid\b|approved|captured/.test(s)) return "cartao_aprovado";
+    // Contrato: "Cancelado ao cancelar contrato", "contrato cancelado", Subscription.status "canceled"
+    if (/cancelad[oa] ao cancelar (o )?contrato|contrato cancelad|^cancell?ed$|subscription cancel/.test(s)) return "cancelada";
+    // Só a cobrança: "Cancelada ao cancelar a cobrança"
+    if (/cancelad[oa] ao cancelar (a )?cobranca|cobranca cancelad/.test(s)) return "cobranca_cancelada";
+    if (/cancelad|cancel/.test(s)) return semTransacao ? "cancelada" : "cobranca_cancelada";
+    if (/negad|recusad|\berro\b|falh|denied|refused|declined|failed|rejected/.test(s)) return "recusado";
+    if (/estornad|expirad|refunded|expired|chargeback/.test(s)) return "outro";
+    if (/waiting ?payment|waiting|pending|aguardando|pendente|criad|\bnova\b|created/.test(s)) return "nova";
+    if (/^active$|^ativ[oa]$/.test(s)) return "contrato_ativo";
+    return "evento";
 }
 
-// Evento de contrato sem cobrança: "nova" (assinatura criada) ou o que o status disser
+// Evento de contrato sem cobrança: campo "evento" (se vier) ou o status
 function classificarSemTransacao(evento, status) {
-    const e = String(evento || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    const e = normalizar(evento);
     if (["nova", "criada", "assinatura_nova"].includes(e)) return "nova";
     if (["cancelada", "cancelamento"].includes(e)) return "cancelada";
     if (["recusada", "recusado"].includes(e)) return "recusado";
-    const c = classificar(status, false);
-    if (c !== "outro") return c;
-    const s = String(status || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-    return /nova|criad|aguardando|pendente|ativ/.test(s) ? "nova" : "outro";
+    return classificar(status, false, true);
 }
-
 function parsePagamento(body) {
     const b = body || {};
     const telefone = String(b.telefone || "").replace(/\D/g, "");
@@ -72,7 +79,7 @@ function parsePagamento(body) {
     const data = parseData(b.data);
     const dataStr = data ? dataSP(data) : null;
     const semTransacao = !transacaoId;
-    const classe = semTransacao ? classificarSemTransacao(b.evento, b.status) : classificar(b.status, pagoFora);
+    const classe = semTransacao ? classificarSemTransacao(b.evento, b.status) : classificar(b.status, pagoFora, false);
     const diaId = (dataStr || dataSP(new Date())).replace(/-/g, "");
     return {
         ok: true,
@@ -120,22 +127,31 @@ const STATUS_ASSINANTE = {
     cancelada: "cancelada",
     nova: "aguardando_pagamento", // assinatura criada, ainda sem cobrança aprovada
     outro: "inativa", // Estornada, Expirada
+    // cobranca_cancelada, contrato_ativo, evento: não mudam o status
 };
-
 const DATA_DO_EVENTO = { cancelada: "data_cancelamento", recusado: "data_recusa", nova: "data_adesao" };
 
 // Campos de assinantes/{telefone}; só inclui nome/plano/valor quando vierem.
 // planoMapa: configuracoes/planos_celcoin ({ planMyId: "Nome do plano" })
-function atualizacaoAssinante(p, planoMapa = {}) {
+// statusAtual: status gravado hoje (para não rebaixar quem já está ativo)
+function atualizacaoAssinante(p, planoMapa = {}, statusAtual = null) {
+    let status = STATUS_ASSINANTE[p.classe];
+    // Contrato "active" ou "waitingPayment": só marca aguardando se ainda não paga (novo, cancelado ou inativo)
+    if (p.classe === "contrato_ativo" || p.classe === "nova") {
+        status = !statusAtual || ["cancelada", "inativa", "aguardando_pagamento"].includes(statusAtual) ? "aguardando_pagamento" : undefined;
+    }
     const upd = {
         telefone: p.telefone,
         origem: "celcoin",
-        status_assinatura: STATUS_ASSINANTE[p.classe],
         status_original: p.status,
-        data_ultimo_evento: p.dataStr || null,
+        data_ultimo_evento: p.dataStr || dataSP(new Date()),
     };
+    if (status) upd.status_assinatura = status;
+    // Sem data no evento: vale a data de hoje (São Paulo)
+    const dataEvento = p.dataStr || dataSP(new Date());
+    if (p.classe === "cobranca_cancelada") upd.data_cobranca_cancelada = dataEvento;
     if (p.codigoCliente) upd.codigo_cliente = p.codigoCliente;
-    if (DATA_DO_EVENTO[p.classe]) upd[DATA_DO_EVENTO[p.classe]] = p.dataStr || null;
+    if (DATA_DO_EVENTO[p.classe]) upd[DATA_DO_EVENTO[p.classe]] = dataEvento;
     if (p.nome) upd.nome = p.nome;
     const planoDoCodigo = p.planoId ? planoMapa[p.planoId] : null;
     if (planoDoCodigo || p.plano) upd.plano = planoDoCodigo || p.plano;

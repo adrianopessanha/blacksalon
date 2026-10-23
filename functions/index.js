@@ -369,6 +369,8 @@ exports.registrarPagamentoAssinatura = onRequest(
                     data_pagamento: p.dataPagamento ? Timestamp.fromDate(p.dataPagamento) : FieldValue.serverTimestamp(),
                     data: p.dataStr,
                     recebido_em: FieldValue.serverTimestamp(),
+                    // O que o Make mandou, para conferência (coleção só admin)
+                    recebido: Object.fromEntries(Object.entries(req.body || {}).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : v])),
                 });
 
                 const upd = atualizacaoCliente(p);
@@ -378,7 +380,7 @@ exports.registrarPagamentoAssinatura = onRequest(
                 if (!cliente.exists && p.nome) upd.nome = p.nome;
                 tx.set(clienteRef, { ...upd, atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
                 tx.set(db.collection("assinantes").doc(p.telefone), {
-                    ...atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}),
+                    ...atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}, assinanteAtual.exists ? assinanteAtual.data().status_assinatura : null),
                     // Assinante novo da Celcoin: o 1º evento marca o início (define o dia do ciclo)
                     ...(assinanteAtual.exists && assinanteAtual.data().inicio_contrato ? {} : { inicio_contrato: p.dataStr || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }) }),
                     ultima_atualizacao: FieldValue.serverTimestamp(),

@@ -38,7 +38,7 @@ test("mesma transação em contas diferentes não colide (telefone diferente)", 
 
 test("classificação dos status reais da Celcoin", () => {
     assert.equal(classificar("Negada na Operadora", false), "recusado");
-    assert.equal(classificar("Cancelada ao cancelar a cobrança", false), "cancelada");
+    assert.equal(classificar("Cancelada ao cancelar a cobrança", false), "cobranca_cancelada");
     assert.equal(classificar("Estornada", false), "outro");
     assert.equal(classificar("Expirada", false), "outro");
 });
@@ -51,7 +51,7 @@ test("clientes: ativa, recusado, cancelada", () => {
     const rec = atualizacaoCliente(parsePagamento({ ...base, status: "Negada na Operadora" }));
     assert.equal(rec.status_assinatura, "pagamento_recusado");
     assert.equal(rec.assinante, undefined);
-    const can = atualizacaoCliente(parsePagamento({ ...base, status: "Cancelada ao cancelar a cobrança" }));
+    const can = atualizacaoCliente(parsePagamento({ ...base, status: "Cancelado ao cancelar contrato" }));
     assert.equal(can.assinante, false);
     assert.equal(can.status_assinatura, "cancelada");
 });
@@ -102,7 +102,7 @@ test("assinantes: status por tipo de evento, origem celcoin, sem CPF/e-mail", ()
 });
 
 test("evento sem transação: cancelamento e assinatura nova, com data; reenvio no mesmo dia tem o mesmo id", () => {
-    const c = parsePagamento({ telefone: "5521986207196", status: "Cancelada ao cancelar a cobrança", data: "2026-11-03 10:00:00" });
+    const c = parsePagamento({ telefone: "5521986207196", status: "canceled", data: "2026-11-03 10:00:00" });
     assert.equal(c.ok, true);
     assert.equal(c.classe, "cancelada");
     assert.equal(c.id, "5521986207196_cancelada_20261103");
@@ -122,4 +122,29 @@ test("planMyId: usa a tabela código → plano; sem tabela, mantém o nome que v
     const sem = atualizacaoAssinante(p, {});
     assert.equal(sem.plano, "plano cabelo e barba ilimitado");
     assert.equal(sem.plano_id, "PLN-140");
+});
+test("contrato x cobrança: só o contrato cancelado cancela o assinante; status em inglês", () => {
+    const contrato = parsePagamento({ ...base, status: "Cancelado ao cancelar contrato", data: "2026-11-05" });
+    assert.equal(contrato.classe, "cancelada");
+    assert.equal(atualizacaoAssinante(contrato).status_assinatura, "cancelada");
+    assert.equal(atualizacaoAssinante(contrato).data_cancelamento, "2026-11-05");
+    const cobranca = parsePagamento({ ...base, status: "Cancelada ao cancelar a cobrança", data: "2026-11-05" });
+    assert.equal(cobranca.classe, "cobranca_cancelada");
+    assert.equal(atualizacaoAssinante(cobranca).status_assinatura, undefined);
+    assert.equal(atualizacaoAssinante(cobranca).data_cobranca_cancelada, "2026-11-05");
+    const en = parsePagamento({ telefone: "5521986207196", status: "canceled", data: "2026-11-06" });
+    assert.equal(en.classe, "cancelada");
+    assert.equal(en.id, "5521986207196_cancelada_20261106");
+});
+
+test("waitingPayment/active não rebaixam assinante que já está ativo; novo fica aguardando", () => {
+    const w = parsePagamento({ telefone: "5521986207196", status: "waitingPayment" });
+    assert.equal(w.classe, "nova");
+    assert.equal(atualizacaoAssinante(w, {}, "ativa").status_assinatura, undefined);
+    assert.equal(atualizacaoAssinante(w, {}, null).status_assinatura, "aguardando_pagamento");
+    const a = parsePagamento({ telefone: "5521986207196", status: "active" });
+    assert.equal(a.classe, "contrato_ativo");
+    assert.equal(atualizacaoAssinante(a, {}, "pagamento_recusado").status_assinatura, undefined);
+    assert.equal(atualizacaoAssinante(a, {}, "cancelada").status_assinatura, "aguardando_pagamento");
+    assert.equal(parsePagamento({ telefone: "5521986207196", status: "overdue" }).classe, "evento");
 });
