@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react'
 import { Search, UserCheck, UserX, RefreshCw, X, ShieldCheck, Users } from 'lucide-react'
 import { useSubscribers } from '../hooks/useSubscribers'
 import { buscarAssinantes } from '../utils/consultaClub'
-import { formatTelefone } from '../utils/phone'
 
 const COR = {
     Ativo: 'border-emerald-500/30 bg-emerald-950/5',
@@ -66,7 +65,7 @@ export function ClubLookup() {
                                 <div className="flex-1 min-w-0">
                                     <h3 className="text-lg font-bold text-white leading-tight">{c.name}</h3>
                                     <div className="text-[13px] text-gray-400 mt-1 space-y-0.5">
-                                        <div>{c.plano || 'Plano não informado'} · {formatTelefone(c.phone)}</div>
+                                        <div>{c.plano || 'Plano não informado'}</div>
                                         {c.dependenteDe && (
                                             <div className="flex items-center gap-1 text-cyan-300"><Users size={13} /> Dependente de {c.dependenteDe}</div>
                                         )}
