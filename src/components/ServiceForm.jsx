@@ -457,6 +457,7 @@ export function ServiceForm() {
                         status_assinatura: 'ativa',
                         status_original: 'Paga fora do sistema',
                         vencimento: vencStr,
+                        ciclo_desde: hojeStr,
                         ultima_atualizacao: serverTimestamp(),
                     }, { merge: true })
                 } else if (origemAtual && origemAtual !== 'balcao') {
@@ -471,6 +472,8 @@ export function ServiceForm() {
                     status_assinatura: 'ativa',
                     status_original: 'Paga fora do sistema',
                     vencimento: vencStr,
+                    // Nova venda reativa e reinicia o ciclo na data da venda (mesmo documento: nunca duplica)
+                    ciclo_desde: hojeStr,
                     ultima_atualizacao: serverTimestamp(),
                     ...(existente.exists() && existente.data().inicio_contrato ? {} : { inicio_contrato: hojeStr }),
                 }, { merge: true })

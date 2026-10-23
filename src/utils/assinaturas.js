@@ -125,7 +125,7 @@ export function cicloDe(diaCobranca, mes, hoje = new Date()) {
     return { inicio, fim }
 }
 
-const diaDoInicio = (a) => { const d = parseInt(String(a.inicio_contrato || a.vencimento || '').slice(8, 10), 10); return Number.isFinite(d) ? d : 1 }
+const diaDoInicio = (a) => { const d = parseInt(String(a.ciclo_desde || a.inicio_contrato || a.vencimento || '').slice(8, 10), 10); return Number.isFinite(d) ? d : 1 }
 
 // Como um lançamento de assinante se liga a um assinante. Ordem: vínculo manual > telefone > código > nome.
 // Ligação só por nome fica "a conferir".
@@ -164,6 +164,8 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
         else if (pagOnline) { pagou = true; liquido = null } // baixa manual: o dinheiro está no lançamento de renovação
         // A cobrança online cai no início do ciclo: ciclo começado antes da integração = não sabemos
         else if (forma !== 'balcao' && diaSP(inicio) < CELCOIN_EVENTOS_DESDE) pagou = null
+        // Balcão vencido sem nova venda: não é "não pagou" (o dono tira da planilha e o cliente volta quando quiser)
+        else if (statusEfetivo(a, hoje) === 'vencido') pagou = null
         else pagou = false
 
         const visitasAgrupadas = agruparVisitas(visitasDet, plano)
@@ -171,7 +173,8 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
             ...a, plano, forma, ciclo: { inicio, fim },
             visitasDet, visitasAgrupadas, visitas: visitasAgrupadas.length, comissao,
             aConferir: visitasDet.filter(x => x.tipo === 'nome').length,
-            alertas: alertasDoCiclo(a, visitasAgrupadas, visitasDet),
+            alertas: alertasDoCiclo(a, visitasAgrupadas, visitasDet, hoje),
+            statusAtual: statusEfetivo(a, hoje),
             pagou, liquido, pagamentoLigadoPor,
         }
     }).filter(Boolean)
@@ -192,6 +195,7 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
             const grupos = []
             if (s.status_assinatura === 'cancelada' && s.visitas > 0) grupos.push('cancelado_atendendo')
             if (s.alertas.length) grupos.push('alertas')
+            if (s.statusAtual === 'vencido') grupos.push('vencido')
             return { ...s, pagou: pag.pagou, liquido: null, resultado: null, grupos }
         }
         const visitasTotais = s.visitas + (s.visitasDependentes || 0)
@@ -202,6 +206,7 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
         if (s.status_assinatura === 'pagamento_recusado') grupos.push('recusado')
         if (s.status_assinatura === 'cancelada' && s.visitas > 0) grupos.push('cancelado_atendendo')
         if (s.alertas.length) grupos.push('alertas')
+        if (s.statusAtual === 'vencido') grupos.push('vencido')
         return { ...s, visitasTotais, comissaoTotal, resultado, grupos }
     })
 }
@@ -254,20 +259,42 @@ export function agruparVisitas(visitasDet, plano) {
 }
 
 // Alertas: duas visitas com menos de 7 dias (fora a exceção acima) e atendimento com pagamento recusado
-export function alertasDoCiclo(a, grupos, visitasDet) {
+// Status efetivo: assinante de balcão ativo com vencimento já passado (sem nova venda) = vencido
+export function statusEfetivo(a, hoje = new Date()) {
+    const forma = formaCobranca(a)
+    if (forma === 'balcao' && a.status_assinatura === 'ativa' && a.vencimento && a.vencimento < diaSP(hoje)) return 'vencido'
+    return a.status_assinatura
+}
+
+// Alertas: 2 visitas na mesma semana do calendário (domingo a sábado; a visita dividida do
+// Cabelo e Barba já conta como 1), mais de 5 visitas no ciclo, atendimento com pagamento
+// recusado e atendimento com assinatura vencida
+export function alertasDoCiclo(a, grupos, visitasDet, hoje = new Date()) {
     const alertas = []
     const fmtDia = (g) => g.dias.map(d => ({ dia: d.dia, barbeiro: d.barbeiros[0] || null }))
-    for (let i = 1; i < grupos.length; i++) {
-        const ant = grupos[i - 1].dias[0].dia, atual = grupos[i].dias[0].dia
-        const gap = Math.round((Date.parse(atual + 'T12:00:00Z') - Date.parse(ant + 'T12:00:00Z')) / 864e5)
-        // Depois de uma visita dividida (barba/cabelo), basta a próxima cair em outra semana
-        const okDividida = grupos[i - 1].dividida && semanaDe(atual) !== semanaDe(ant)
-        if (gap < REGRA_PLANO.diasEntreVisitas && !okDividida) alertas.push({ tipo: 'menos_7_dias', texto: `Duas visitas em menos de 7 dias (${gap} dia${gap === 1 ? '' : 's'})`, visitas: [...fmtDia(grupos[i - 1]), ...fmtDia(grupos[i])] })
+    const porSemana = new Map()
+    for (const g of grupos) {
+        const s = semanaDe(g.dias[0].dia)
+        porSemana.set(s, [...(porSemana.get(s) || []), g])
     }
-    if (a.status_assinatura === 'pagamento_recusado') {
-        const desde = a.data_recusa || null
+    for (const [semana, gs] of porSemana) {
+        if (gs.length < 2) continue
+        const fim = new Date(semana + 'T12:00:00Z'); fim.setUTCDate(fim.getUTCDate() + 6)
+        const dm = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
+        alertas.push({ tipo: 'mesma_semana', texto: `${gs.length} visitas na mesma semana (${dm(semana)} a ${dm(fim.toISOString().slice(0, 10))})`, visitas: gs.flatMap(fmtDia) })
+    }
+    if (grupos.length > REGRA_PLANO.maxVisitasCiclo) {
+        alertas.push({ tipo: 'mais_de_5', texto: `${grupos.length} visitas no ciclo (máximo ${REGRA_PLANO.maxVisitasCiclo})`, visitas: grupos.flatMap(fmtDia) })
+    }
+    const atendidoDesde = (desde, tipo, texto) => {
         const depois = visitasDet.filter(({ l }) => { const d = toDate(l.data); return d && (!desde || diaSP(d) >= desde) })
-        if (depois.length) alertas.push({ tipo: 'recusado_atendido', texto: 'Atendido com pagamento recusado', visitas: depois.map(({ l }) => ({ dia: diaSP(toDate(l.data)), barbeiro: l.barbeiro_nome || null })) })
+        if (depois.length) alertas.push({ tipo, texto, visitas: depois.map(({ l }) => ({ dia: diaSP(toDate(l.data)), barbeiro: l.barbeiro_nome || null })) })
+    }
+    if (a.status_assinatura === 'pagamento_recusado') atendidoDesde(a.data_recusa || null, 'recusado_atendido', 'Atendido com pagamento recusado')
+    if (statusEfetivo(a, hoje) === 'vencido') {
+        // Vence no dia do vencimento: atendimento a partir do dia seguinte é com assinatura vencida
+        const d = new Date(a.vencimento + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)
+        atendidoDesde(d.toISOString().slice(0, 10), 'vencido_atendido', 'Atendido com assinatura vencida')
     }
     return alertas
 }
@@ -286,7 +313,7 @@ export function pontoEquilibrio(plano) {
 export function porPlano(situacao) {
     const g = {}
     for (const s of situacao) {
-        if (s.dependenteDe || (s.status_assinatura === 'cancelada' && s.visitas === 0)) continue
+        if (s.dependenteDe || (['cancelada', 'vencido'].includes(s.statusAtual) && s.visitas === 0)) continue
         const k = s.plano.label
         const x = (g[k] ||= { plano: s.plano, assinantes: 0, visitas: 0, receita: 0, comissoes: 0, comPagamento: 0, resultado: 0 })
         x.assinantes++

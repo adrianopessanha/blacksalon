@@ -68,7 +68,7 @@ test('situação: prejuízo, pagou e não veio, recusado, cancelado atendendo', 
     ]
     const s = situacaoAssinantes({ assinantes, lancamentos: lanc, pagamentos: [], mes: '2026-11', hoje })
     const by = Object.fromEntries(s.map(x => [x.telefone, x]))
-    assert.deepEqual(by.A.grupos, ['alertas']) // 9 visitas em dias seguidos: alerta de menos de 7 dias
+    assert.deepEqual(by.A.grupos, ['alertas']) // 9 visitas em dias seguidos: mesma semana e mais de 5 no ciclo
     assert.equal(by.A.resultado, -10)
     assert.deepEqual(by.B.grupos, ['pagou_nao_veio'])
     assert.ok(by.C.grupos.includes('recusado'))
@@ -170,7 +170,7 @@ test('exceção só vale para Cabelo e Barba e para serviços complementares', (
     assert.equal(agruparVisitas([V('14', 'Barba plano'), V('16', 'Corte maq plano')], CRIA).length, 2)
     assert.equal(agruparVisitas([V('14', 'Corte maq plano'), V('16', 'Corte maq plano')], CB).length, 2)
     const al = alertasDoCiclo({}, agruparVisitas([V('14', 'Corte maq plano', 'Jonatas'), V('16', 'Corte maq plano', 'Veloso')], CB), [])
-    assert.equal(al[0].tipo, 'menos_7_dias')
+    assert.equal(al[0].tipo, 'mesma_semana')
     assert.deepEqual(al[0].visitas.map(v => `${v.dia} ${v.barbeiro}`), ['2026-10-14 Jonatas', '2026-10-16 Veloso'])
 })
 
@@ -180,4 +180,29 @@ test('alerta de atendimento com pagamento recusado (depois da data da recusa, se
     const r = al.find(a => a.tipo === 'recusado_atendido')
     assert.deepEqual(r.visitas.map(v => v.dia), ['2026-10-20'])
     assert.equal(alertasDoCiclo({ status_assinatura: 'ativa' }, agruparVisitas(det, CRIA), det).length, 0)
+})
+import { statusEfetivo } from './assinaturas.js'
+
+test('semana do calendário: 6 dias de diferença em semanas diferentes não é alerta; sexta e segunda seguinte também não', () => {
+    // 16/10 (sex) e 22/10 (qui): semanas 11-17 e 18-24
+    assert.equal(alertasDoCiclo({}, agruparVisitas([V('16', 'Corte'), V('22', 'Corte')], CRIA), []).length, 0)
+    // 13/10 (ter) e 17/10 (sáb): mesma semana
+    assert.equal(alertasDoCiclo({}, agruparVisitas([V('13', 'Corte'), V('17', 'Corte')], CRIA), [])[0].tipo, 'mesma_semana')
+})
+
+test('balcão vencido: status vencido no dia seguinte ao vencimento, sem "não pagou"; Pix manual nunca vence', () => {
+    const a = { telefone: 'Z', nome: 'Zé', valor: 80, origem: 'balcao', status_assinatura: 'ativa', inicio_contrato: '2026-09-10', vencimento: '2026-10-10' }
+    assert.equal(statusEfetivo(a, new Date('2026-10-10T15:00:00Z')), 'ativa')
+    assert.equal(statusEfetivo(a, new Date('2026-10-11T15:00:00Z')), 'vencido')
+    assert.equal(statusEfetivo({ ...a, forma_cobranca: 'pix_manual' }, new Date('2026-11-30T15:00:00Z')), 'ativa')
+    const [s] = situacaoAssinantes({ assinantes: [a], lancamentos: [atend(new Date(2026, 9, 15, 12).toISOString(), 10, { cliente_telefone: 'Z' })], pagamentos: [], mes: '2026-10', hoje: new Date(2026, 9, 20) })
+    assert.equal(s.pagou, null)
+    assert.equal(s.resultado, null)
+    assert.ok(s.grupos.includes('vencido'))
+    assert.equal(s.alertas.find(x => x.tipo === 'vencido_atendido').visitas[0].dia, '2026-10-15')
+})
+
+test('ciclo reinicia na data da última venda (ciclo_desde), sem mudar o início do contrato', () => {
+    const [s] = situacaoAssinantes({ assinantes: [{ telefone: 'Y', nome: 'Y', valor: 80, origem: 'balcao', status_assinatura: 'ativa', inicio_contrato: '2025-01-05', ciclo_desde: '2026-10-20', vencimento: '2026-11-20' }], lancamentos: [], pagamentos: [], mes: '2026-10', hoje: new Date(2026, 9, 22) })
+    assert.equal(s.ciclo.inicio.getDate(), 20)
 })

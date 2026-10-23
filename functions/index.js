@@ -574,3 +574,26 @@ exports.recalcularResumoAssinaturas = onCall(
         return await gerarResumo(mes, { usarAtivosAtuais: false });
     }
 );
+
+// ==========================================
+// Assinante de balcão vencido: no dia seguinte ao vencimento sem nova "Venda Assinatura"
+// (a nova venda reativa o mesmo documento e reinicia o ciclo)
+// ==========================================
+exports.vencerAssinantesBalcao = onSchedule(
+    { schedule: "30 3 * * *", timeZone: "America/Sao_Paulo", region: "southamerica-east1" },
+    async () => {
+        const hoje = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+        const ativos = await db.collection("assinantes").where("status_assinatura", "==", "ativa").get();
+        const batch = db.batch();
+        let n = 0;
+        for (const d of ativos.docs) {
+            const a = d.data();
+            const forma = a.forma_cobranca || (a.origem === "balcao" ? "balcao" : a.origem || "celcoin");
+            if (forma !== "balcao" || !a.vencimento || a.vencimento >= hoje) continue;
+            batch.update(d.ref, { status_assinatura: "vencido", data_vencido: hoje, ultima_atualizacao: FieldValue.serverTimestamp() });
+            n++;
+        }
+        if (n) await batch.commit();
+        console.log("assinantes de balcão vencidos hoje:", n);
+    }
+);

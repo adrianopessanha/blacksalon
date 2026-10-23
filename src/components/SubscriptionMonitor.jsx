@@ -63,6 +63,7 @@ const GRUPOS = [
     { id: 'pagou_nao_veio', label: 'Pagou e não veio' },
     { id: 'recusado', label: 'Cartão recusado' },
     { id: 'cancelado_atendendo', label: 'Cancelado ainda atendendo' },
+    { id: 'vencido', label: 'Vencido (balcão)' },
     { id: 'alertas', label: 'Com alerta' },
 ]
 
@@ -371,7 +372,7 @@ function PorPlano({ planos }) {
     )
 }
 
-const ROTULO_GRUPO = { pagou_nao_veio: 'pagou e não veio', recusado: 'cartão recusado', cancelado_atendendo: 'cancelado atendendo', alertas: 'alerta' }
+const ROTULO_GRUPO = { pagou_nao_veio: 'pagou e não veio', recusado: 'cartão recusado', cancelado_atendendo: 'cancelado atendendo', alertas: 'alerta', vencido: 'vencido' }
 
 const ROTULO_LIGACAO = { manual: 'vinculado à mão', telefone: 'telefone', codigo: 'código', nome: 'a conferir (só nome)' }
 
@@ -401,7 +402,7 @@ function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
                         <span>ciclo {dm(s.ciclo.inicio)}–{dm(s.ciclo.fim)}</span>
                         <span>{s.visitas} visita{s.visitas === 1 ? '' : 's'}{s.visitasDependentes ? ` + ${s.visitasDependentes} de dependente` : ''} · comissão {fmt(s.comissaoTotal ?? s.comissao)}</span>
                         <span className={s.pagou === true ? 'text-emerald-400' : s.pagou === false ? 'text-red-400' : 'text-gray-500'}>
-                            {s.pagou === true ? (s.pagamentoLigadoPor === 'nome' ? 'pagou (a conferir)' : 'pagou') : s.pagou === false ? 'não pagou' : 'pagamento sem dado'}
+                            {s.statusAtual === 'vencido' && s.pagou !== true ? `vencido em ${String(s.vencimento).split('-').reverse().join('/')}` : s.pagou === true ? (s.pagamentoLigadoPor === 'nome' ? 'pagou (a conferir)' : 'pagou') : s.pagou === false ? 'não pagou' : 'pagamento sem dado'}
                         </span>
                         {s.aConferir > 0 && <span className="text-orange-400">{s.aConferir} a conferir</span>}
                         {s.grupos.map(g => <span key={g} className="text-yellow-400">{ROTULO_GRUPO[g]}</span>)}
