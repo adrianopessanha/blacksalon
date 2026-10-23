@@ -5,7 +5,8 @@ const { defineSecret } = require("firebase-functions/params");
 const { timingSafeEqual } = require("crypto");
 const { parseAgendamento } = require("./agendamento");
 const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato } = require("./assinatura");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { visaoPublica } = require("./publico");
 const { onTaskDispatched } = require("firebase-functions/v2/tasks");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -597,5 +598,35 @@ exports.vencerAssinantesBalcao = onSchedule(
         }
         if (n) await batch.commit();
         console.log("assinantes de balcão vencidos hoje:", n);
+    }
+);
+
+// ==========================================
+// Visão reduzida para os barbeiros: assinantes_publico/{telefone}
+// Atualiza a cada mudança no cadastro, inclusive os dependentes de um pagador
+// ==========================================
+exports.sincronizarAssinantePublico = onDocumentWritten(
+    { document: "assinantes/{telefone}", region: "southamerica-east1" },
+    async (event) => {
+        const tel = event.params.telefone;
+        const depois = event.data?.after;
+        const pubRef = db.collection("assinantes_publico").doc(tel);
+        const dependentes = await db.collection("assinantes").where("pagador", "==", tel).get();
+
+        if (!depois?.exists) {
+            await pubRef.delete();
+            for (const d of dependentes.docs) await db.collection("assinantes_publico").doc(d.id).set(visaoPublica({ telefone: d.id, ...d.data() }));
+            return;
+        }
+        const a = { telefone: tel, ...depois.data() };
+        let pagador = null;
+        if (a.pagador) {
+            const p = await db.collection("assinantes").doc(a.pagador).get();
+            if (p.exists) pagador = { telefone: p.id, ...p.data() };
+        }
+        await pubRef.set(visaoPublica(a, pagador));
+        for (const d of dependentes.docs) {
+            await db.collection("assinantes_publico").doc(d.id).set(visaoPublica({ telefone: d.id, ...d.data() }, a));
+        }
     }
 );

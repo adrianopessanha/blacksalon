@@ -62,15 +62,22 @@ service cloud.firestore {
       allow read, write: if isAuthorized();
     }
 
-    // Assinantes — ID = telefone. Sem CPF/e-mail: barbeiros leem.
+    // Assinantes — ID = telefone. Cadastro completo (valores, códigos): só admin lê.
     // Barbeiro só cria/altera origem "balcao"; celcoin/abacatepay só admin (ou a função, que ignora regras).
     match /assinantes/{telefone} {
-      allow read: if isAuthorized();
+      allow read: if isAdmin();
       allow create: if isAdmin()
         || (isAuthorized() && request.resource.data.origem == 'balcao');
       allow update: if isAdmin()
         || (isAuthorized() && resource.data.origem == 'balcao' && request.resource.data.origem == 'balcao');
       allow delete: if isAdmin();
+    }
+
+    // Visão reduzida para barbeiros (nome, plano, status, vencimento, dependente): sem valores.
+    // Mantida pela função sincronizarAssinantePublico.
+    match /assinantes_publico/{telefone} {
+      allow read: if isAuthorized();
+      allow write: if false;
     }
 
     // Resumo mensal de assinaturas: gravado só pelas funções (Admin SDK)

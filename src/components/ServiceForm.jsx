@@ -446,7 +446,8 @@ export function ServiceForm() {
             const tel55Venda = normalizeTelefone55(formData.cliente_telefone)
             if (formData.tipo === 'venda_assinatura' && tel55Venda) {
                 const ref = doc(db, 'assinantes', tel55Venda)
-                const existente = await getDoc(ref)
+                // Barbeiro lê só a visão reduzida (sem valores); a escrita vai no cadastro
+                const existente = await getDoc(doc(db, 'assinantes_publico', tel55Venda))
                 const origemAtual = existente.exists() ? existente.data().origem : null
                 const hojeStr = todayStr
                 const venc = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate())
