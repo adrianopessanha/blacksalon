@@ -281,7 +281,7 @@ function MonitorAssinaturas({ filters }) {
 
     // Mesma função da aba Assinaturas: o número aqui tem que ser igual ao de lá
     const res = dados && resultadoMes({ mes, pagamentos: dados.pag, lancamentos: dados.lanc, assinantes: dados.assinantes, liquidoReal: dados.lapis, liquidoFinanceiro: dados.financeiro })
-    const foraRegra = dados ? situacaoAssinantes({ assinantes: dados.assinantes, lancamentos: dados.lanc, pagamentos: dados.pag, mes }).filter(s => s.grupos.includes('fora_regra')).length : 0
+    const foraRegra = dados ? situacaoAssinantes({ assinantes: dados.assinantes, lancamentos: dados.lanc, pagamentos: dados.pag, mes }).filter(s => s.grupos.includes('alertas')).length : 0
     const [y, mm] = mes.split('-')
     const nomeMes = `${MESES[Number(mm) - 1]}/${y}`
 
@@ -299,8 +299,8 @@ function MonitorAssinaturas({ filters }) {
             ) : !res ? <div className="text-sm text-gray-500">Calculando...</div> : (
                 <div className="space-y-2">
                     {foraRegra > 0 && (
-                        <a href={`#/assinaturas?mes=${mes}&grupo=fora_regra`} className="block text-sm text-orange-300 bg-orange-950/30 border border-orange-800/50 rounded-lg px-3 py-2">
-                            ⚠ {foraRegra} assinante{foraRegra === 1 ? '' : 's'} fora da regra (menos de 7 dias entre visitas ou mais de 5 no ciclo) →
+                        <a href={`#/assinaturas?mes=${mes}&grupo=alertas`} className="block text-sm text-orange-300 bg-orange-950/30 border border-orange-800/50 rounded-lg px-3 py-2">
+                            ⚠ {foraRegra} assinante{foraRegra === 1 ? '' : 's'} com alerta (visitas em menos de 7 dias ou atendido com pagamento recusado) →
                         </a>
                     )}
                     <ResultadoMes res={res} mes={mes} lapis={dados.lapis} onSalvarLapis={salvarLapis} compacto />

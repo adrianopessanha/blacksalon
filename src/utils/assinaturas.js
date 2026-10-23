@@ -156,6 +156,7 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
         const forma = formaCobranca(a)
         const pagOnline = pagamentos.find(p => p.telefone === a.telefone && (p.receita || p.tipo === 'baixa_manual') && dentro(new Date(String(p.data) + 'T12:00:00')))
         const pagBalcao = lancamentos.find(l => ehRenovacaoBalcao(l) && dentro(toDate(l.data)) && tipoLigacao(a, l))
+        const pagamentoLigadoPor = pagBalcao ? tipoLigacao(a, pagBalcao) : null
         let pagou = null, liquido = null
         if (forma === 'pix_manual') { pagou = a.status_assinatura === 'ativa'; liquido = pagou ? r2(n(a.valor)) : null }
         else if (pagBalcao) { pagou = true; liquido = r2(n(pagBalcao.valor_bruto) - taxaBalcao(pagBalcao.forma_pagamento, pagBalcao.valor_bruto)) }
@@ -165,12 +166,13 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
         else if (forma !== 'balcao' && diaSP(inicio) < CELCOIN_EVENTOS_DESDE) pagou = null
         else pagou = false
 
+        const visitasAgrupadas = agruparVisitas(visitasDet, plano)
         return {
             ...a, plano, forma, ciclo: { inicio, fim },
-            visitasDet, visitas: visitasDet.length, comissao,
+            visitasDet, visitasAgrupadas, visitas: visitasAgrupadas.length, comissao,
             aConferir: visitasDet.filter(x => x.tipo === 'nome').length,
-            regra: foraDaRegra(visitasDet),
-            pagou, liquido,
+            alertas: alertasDoCiclo(a, visitasAgrupadas, visitasDet),
+            pagou, liquido, pagamentoLigadoPor,
         }
     }).filter(Boolean)
 
@@ -189,18 +191,17 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
             const pag = porTel.get(s.pagador)
             const grupos = []
             if (s.status_assinatura === 'cancelada' && s.visitas > 0) grupos.push('cancelado_atendendo')
-            if (s.regra.fora) grupos.push('fora_regra')
+            if (s.alertas.length) grupos.push('alertas')
             return { ...s, pagou: pag.pagou, liquido: null, resultado: null, grupos }
         }
         const visitasTotais = s.visitas + (s.visitasDependentes || 0)
         const comissaoTotal = r2(s.comissao + (s.comissaoDependentes || 0))
         const resultado = s.pagou === true && s.liquido != null ? r2(s.liquido - comissaoTotal) : s.pagou === false ? r2(-comissaoTotal) : null
         const grupos = []
-        if (s.pagou === true && resultado != null && resultado < 0) grupos.push('prejuizo')
         if (s.pagou === true && visitasTotais === 0) grupos.push('pagou_nao_veio')
         if (s.status_assinatura === 'pagamento_recusado') grupos.push('recusado')
         if (s.status_assinatura === 'cancelada' && s.visitas > 0) grupos.push('cancelado_atendendo')
-        if (s.regra.fora) grupos.push('fora_regra')
+        if (s.alertas.length) grupos.push('alertas')
         return { ...s, visitasTotais, comissaoTotal, resultado, grupos }
     })
 }
@@ -209,33 +210,67 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
 export function naoLigados(lancamentos, assinantes, inicio, fim) {
     return lancamentos.filter(l => {
         const d = toDate(l.data)
-        return ehAtendAssinante(l) && d && d >= inicio && d <= fim && !assinantes.some(a => tipoLigacao(a, l))
+        return (ehAtendAssinante(l) || ehRenovacaoBalcao(l)) && d && d >= inicio && d <= fim && !assinantes.some(a => tipoLigacao(a, l))
     })
 }
 // Regra do plano: no mínimo 7 dias entre visitas e no máximo 5 visitas por ciclo (por pessoa)
 export const REGRA_PLANO = { diasEntreVisitas: 7, maxVisitasCiclo: 5 }
 
-// Lançamentos do mesmo dia contam como 1 visita (ex.: corte e barba lançados separados)
-export function foraDaRegra(visitasDet) {
+// Uma "visita" = um dia de atendimento. Exceção do plano Cabelo e Barba: barba num dia e cabelo
+// noutro, na mesma semana (domingo a sábado), contam como 1 visita (as comissões somam).
+const tipoServico = (desc) => {
+    const d = semAcento(desc)
+    const barba = d.includes('barba'), cabelo = /corte|cabelo|maq|tes/.test(d)
+    return barba && cabelo ? 'completo' : barba ? 'barba' : 'cabelo'
+}
+const semanaDe = (dia) => { const d = new Date(dia + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - d.getUTCDay()); return d.toISOString().slice(0, 10) }
+
+export function agruparVisitas(visitasDet, plano) {
     const porDia = new Map()
     for (const { l } of visitasDet) {
         const d = toDate(l.data)
         if (!d) continue
         const dia = diaSP(d)
-        if (!porDia.has(dia)) porDia.set(dia, { dia, data: d, barbeiros: new Set() })
-        if (l.barbeiro_nome) porDia.get(dia).barbeiros.add(l.barbeiro_nome)
+        const x = porDia.get(dia) || { dia, barbeiros: new Set(), tipos: new Set(), comissao: 0 }
+        if (l.barbeiro_nome) x.barbeiros.add(l.barbeiro_nome)
+        x.tipos.add(tipoServico(l.servico_descricao))
+        x.comissao += n(l.comissao_barbeiro)
+        porDia.set(dia, x)
     }
-    const dias = [...porDia.values()].sort((a, b) => a.dia.localeCompare(b.dia)).map(x => ({ dia: x.dia, barbeiros: [...x.barbeiros] }))
-    const motivos = []
-    const DIA_MS = 864e5
-    for (let i = 1; i < dias.length; i++) {
-        const gap = Math.round((Date.parse(dias[i].dia + 'T12:00:00Z') - Date.parse(dias[i - 1].dia + 'T12:00:00Z')) / DIA_MS)
-        if (gap < REGRA_PLANO.diasEntreVisitas) motivos.push(`visitas com ${gap} dia${gap === 1 ? '' : 's'} de diferença`)
+    const dias = [...porDia.values()].sort((a, b) => a.dia.localeCompare(b.dia))
+    const podeDividir = plano?.id === 'cabelo_barba'
+    const grupos = []
+    for (const d of dias) {
+        const tipoDia = d.tipos.has('completo') || d.tipos.size > 1 ? 'completo' : [...d.tipos][0]
+        const g = grupos[grupos.length - 1]
+        // Um dia só de barba + outro dia na mesma semana (cabelo ou completo) = 1 visita do plano
+        const complementa = podeDividir && g && g.dias.length === 1 && semanaDe(g.dias[0].dia) === semanaDe(d.dia)
+            && (g.tipo === 'barba') !== (tipoDia === 'barba')
+        const item = { dia: d.dia, barbeiros: [...d.barbeiros], tipo: tipoDia }
+        if (complementa) { g.dias.push(item); g.tipo = 'completo'; g.comissao = r2(g.comissao + d.comissao); g.dividida = true }
+        else grupos.push({ dias: [item], tipo: tipoDia, comissao: r2(d.comissao), dividida: false })
     }
-    if (dias.length > REGRA_PLANO.maxVisitasCiclo) motivos.push(`${dias.length} visitas no ciclo (máximo ${REGRA_PLANO.maxVisitasCiclo})`)
-    return { fora: motivos.length > 0, motivos, dias }
+    return grupos
 }
 
+// Alertas: duas visitas com menos de 7 dias (fora a exceção acima) e atendimento com pagamento recusado
+export function alertasDoCiclo(a, grupos, visitasDet) {
+    const alertas = []
+    const fmtDia = (g) => g.dias.map(d => ({ dia: d.dia, barbeiro: d.barbeiros[0] || null }))
+    for (let i = 1; i < grupos.length; i++) {
+        const ant = grupos[i - 1].dias[0].dia, atual = grupos[i].dias[0].dia
+        const gap = Math.round((Date.parse(atual + 'T12:00:00Z') - Date.parse(ant + 'T12:00:00Z')) / 864e5)
+        // Depois de uma visita dividida (barba/cabelo), basta a próxima cair em outra semana
+        const okDividida = grupos[i - 1].dividida && semanaDe(atual) !== semanaDe(ant)
+        if (gap < REGRA_PLANO.diasEntreVisitas && !okDividida) alertas.push({ tipo: 'menos_7_dias', texto: `Duas visitas em menos de 7 dias (${gap} dia${gap === 1 ? '' : 's'})`, visitas: [...fmtDia(grupos[i - 1]), ...fmtDia(grupos[i])] })
+    }
+    if (a.status_assinatura === 'pagamento_recusado') {
+        const desde = a.data_recusa || null
+        const depois = visitasDet.filter(({ l }) => { const d = toDate(l.data); return d && (!desde || diaSP(d) >= desde) })
+        if (depois.length) alertas.push({ tipo: 'recusado_atendido', texto: 'Atendido com pagamento recusado', visitas: depois.map(({ l }) => ({ dia: diaSP(toDate(l.data)), barbeiro: l.barbeiro_nome || null })) })
+    }
+    return alertas
+}
 // Pior caso: líquido do plano (preço − taxa online) − visitas máximas × comissão por visita
 export function piorCaso(plano) {
     if (!plano?.preco || !plano?.comissaoVisita) return null

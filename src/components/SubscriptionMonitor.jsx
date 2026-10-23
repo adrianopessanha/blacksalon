@@ -60,11 +60,10 @@ export function resultadoDoMes(dados, mes) {
 
 const GRUPOS = [
     { id: 'todos', label: 'Todos' },
-    { id: 'prejuizo', label: 'Dá prejuízo' },
     { id: 'pagou_nao_veio', label: 'Pagou e não veio' },
     { id: 'recusado', label: 'Cartão recusado' },
     { id: 'cancelado_atendendo', label: 'Cancelado ainda atendendo' },
-    { id: 'fora_regra', label: 'Fora da regra' },
+    { id: 'alertas', label: 'Com alerta' },
 ]
 
 export function SubscriptionMonitor() {
@@ -129,8 +128,9 @@ export function SubscriptionMonitor() {
                     <PorPlano planos={calc.planos} />
                     <section className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
                         <h2 className="font-semibold text-gray-200 mb-3 flex items-center gap-2"><Users size={18} className="text-cyan-400" /> Por assinante (ciclo atual de cada um)</h2>
+                        <QuadroAlertas situacao={calc.situacao} />
                         <div className="flex flex-wrap gap-1.5 mb-3">
-                            {GRUPOS.map(g => {
+                            {GRUPOS.filter(g => g.id !== 'alertas' || calc.situacao.some(s => s.grupos.includes('alertas'))).map(g => {
                                 const qtd = g.id === 'todos' ? calc.situacao.length : calc.situacao.filter(s => s.grupos.includes(g.id)).length
                                 return (
                                     <button key={g.id} type="button" onClick={() => setGrupo(g.id)}
@@ -371,14 +371,14 @@ function PorPlano({ planos }) {
     )
 }
 
-const ROTULO_GRUPO = { prejuizo: 'dá prejuízo', pagou_nao_veio: 'pagou e não veio', recusado: 'cartão recusado', cancelado_atendendo: 'cancelado atendendo', fora_regra: 'fora da regra' }
+const ROTULO_GRUPO = { pagou_nao_veio: 'pagou e não veio', recusado: 'cartão recusado', cancelado_atendendo: 'cancelado atendendo', alertas: 'alerta' }
 
 const ROTULO_LIGACAO = { manual: 'vinculado à mão', telefone: 'telefone', codigo: 'código', nome: 'a conferir (só nome)' }
 
 function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
     const [aberto, setAberto] = useState(false)
     const [salvando, setSalvando] = useState(false)
-    const destaque = s.grupos.includes('prejuizo') ? 'border-l-2 border-l-red-500 bg-red-950/10' : s.grupos.includes('recusado') ? 'border-l-2 border-l-yellow-500 bg-yellow-950/10' : ''
+    const destaque = s.grupos.includes('alertas') ? 'border-l-2 border-l-orange-500 bg-orange-950/10' : s.grupos.includes('recusado') ? 'border-l-2 border-l-yellow-500 bg-yellow-950/10' : ''
     const dm = (d) => d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
     const soltos = aberto ? naoLigados(lancamentos, assinantes, s.ciclo.inicio, s.ciclo.fim) : []
     const pagadores = assinantes.filter(a => a.telefone !== s.telefone && !a.pagador).sort((a, b) => String(a.nome).localeCompare(String(b.nome)))
@@ -401,16 +401,16 @@ function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
                         <span>ciclo {dm(s.ciclo.inicio)}–{dm(s.ciclo.fim)}</span>
                         <span>{s.visitas} visita{s.visitas === 1 ? '' : 's'}{s.visitasDependentes ? ` + ${s.visitasDependentes} de dependente` : ''} · comissão {fmt(s.comissaoTotal ?? s.comissao)}</span>
                         <span className={s.pagou === true ? 'text-emerald-400' : s.pagou === false ? 'text-red-400' : 'text-gray-500'}>
-                            {s.pagou === true ? 'pagou' : s.pagou === false ? 'não pagou' : 'pagamento sem dado'}
+                            {s.pagou === true ? (s.pagamentoLigadoPor === 'nome' ? 'pagou (a conferir)' : 'pagou') : s.pagou === false ? 'não pagou' : 'pagamento sem dado'}
                         </span>
                         {s.aConferir > 0 && <span className="text-orange-400">{s.aConferir} a conferir</span>}
                         {s.grupos.map(g => <span key={g} className="text-yellow-400">{ROTULO_GRUPO[g]}</span>)}
                     </div>
-                    {s.regra?.fora && (
-                        <div className="text-[11px] text-orange-300 mt-0.5">
-                            {s.regra.motivos.join(' · ')}: {s.regra.dias.map(d => `${d.dia.slice(8, 10)}/${d.dia.slice(5, 7)} ${(d.barbeiros[0] || '').split(' ')[0]}`).join(', ')}
+                    {s.alertas?.map((al, k) => (
+                        <div key={k} className="text-[11px] text-orange-300 mt-0.5">
+                            {al.texto}: {al.visitas.map(v => `${v.dia.slice(8, 10)}/${v.dia.slice(5, 7)} ${(v.barbeiro || '').split(' ')[0]}`).join(', ')}
                         </div>
-                    )}
+                    ))}
                 </div>
                 <div className={`text-sm font-bold whitespace-nowrap ${s.resultado == null ? 'text-gray-500' : s.resultado >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.resultado == null ? '—' : fmt(s.resultado)}</div>
             </button>
@@ -430,11 +430,11 @@ function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
                     </div>
                     {soltos.length > 0 && (
                         <div>
-                            <div className="text-gray-500 mb-1">Atendimentos de assinante sem dono neste ciclo (vincular a {s.nome})</div>
+                            <div className="text-gray-500 mb-1">Atendimentos e pagamentos de assinatura sem dono neste ciclo (vincular a {s.nome})</div>
                             {soltos.slice(0, 15).map(l => (
                                 <div key={l.id} className="flex items-center gap-2 text-gray-400">
                                     <span>{l.data?.toDate?.().toLocaleDateString('pt-BR')}</span>
-                                    <span className="truncate flex-1">{l.cliente_nome || 'sem nome'} · {l.barbeiro_nome}</span>
+                                    <span className="truncate flex-1">{l.forma_pagamento === 'Assinante' ? '' : `pagamento R$ ${l.valor_bruto} ${l.forma_pagamento} · `}{l.cliente_nome || 'sem nome'} · {l.barbeiro_nome}</span>
                                     <button type="button" disabled={salvando} onClick={() => vincular(l.id)} className="text-cyan-400 underline">vincular</button>
                                 </div>
                             ))}
@@ -450,6 +450,19 @@ function LinhaAssinante({ s, assinantes, lancamentos, onMudou }) {
                     </label>
                 </div>
             )}
+        </div>
+    )
+}
+function QuadroAlertas({ situacao }) {
+    const casos = situacao.flatMap(s => (s.alertas || []).map(al => ({ s, al })))
+    if (!casos.length) return null
+    return (
+        <div className="mb-3 rounded-xl border border-orange-800/50 bg-orange-950/20 p-3 text-xs space-y-1.5">
+            {casos.map(({ s, al }, k) => (
+                <div key={k} className="text-orange-200">
+                    <b>{al.texto}</b> — {s.nome}: {al.visitas.map(v => `${v.dia.slice(8, 10)}/${v.dia.slice(5, 7)} ${(v.barbeiro || '?').split(' ')[0]}`).join(', ')}
+                </div>
+            ))}
         </div>
     )
 }

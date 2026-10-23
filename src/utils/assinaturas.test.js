@@ -68,7 +68,7 @@ test('situação: prejuízo, pagou e não veio, recusado, cancelado atendendo', 
     ]
     const s = situacaoAssinantes({ assinantes, lancamentos: lanc, pagamentos: [], mes: '2026-11', hoje })
     const by = Object.fromEntries(s.map(x => [x.telefone, x]))
-    assert.deepEqual(by.A.grupos, ['prejuizo', 'fora_regra']) // 9 visitas em dias seguidos
+    assert.deepEqual(by.A.grupos, ['alertas']) // 9 visitas em dias seguidos: alerta de menos de 7 dias
     assert.equal(by.A.resultado, -10)
     assert.deepEqual(by.B.grupos, ['pagou_nao_veio'])
     assert.ok(by.C.grupos.includes('recusado'))
@@ -143,7 +143,7 @@ test('tendência: mês sem lançamento mostra sem dado; mês atual usa ativos de
     assert.equal(pontoTendencia(resultadoMes({ mes: '2026-11' }), { ativos: 80 }, 0, 86).ativosHoje, false)
 })
 
-import { foraDaRegra, piorCaso } from './assinaturas.js'
+import { agruparVisitas, alertasDoCiclo, piorCaso } from './assinaturas.js'
 
 test('pior caso com 5 visitas: positivo em todos os planos', () => {
     assert.equal(piorCaso(planoDe({ plano: 'Cabelo e Barba' })), 43.3)
@@ -152,14 +152,32 @@ test('pior caso com 5 visitas: positivo em todos os planos', () => {
     assert.equal(piorCaso(planoDe({ plano: '2 × Corte de Cria' })), 49.57)
 })
 
-test('fora da regra: menos de 7 dias entre visitas ou mais de 5 no ciclo; mesmo dia conta 1', () => {
-    const v = (dia, b = 'Jonatas') => ({ l: { data: new Date(`2026-10-${dia}T15:00:00Z`), barbeiro_nome: b } })
-    assert.equal(foraDaRegra([v('01'), v('08'), v('15')]).fora, false)
-    const curto = foraDaRegra([v('01'), v('04', 'Veloso')])
-    assert.equal(curto.fora, true)
-    assert.match(curto.motivos[0], /3 dias/)
-    assert.deepEqual(curto.dias.map(d => d.barbeiros[0]), ['Jonatas', 'Veloso'])
-    assert.equal(foraDaRegra([v('01'), v('01', 'Veloso')]).fora, false)
-    const muitas = foraDaRegra(['01', '08', '15', '22', '29'].map(d => v(d)).concat([{ l: { data: new Date('2026-11-05T15:00:00Z') } }]))
-    assert.match(muitas.motivos.join(), /6 visitas/)
+const V = (dia, desc, b = 'Wellington') => ({ l: { data: new Date(`2026-10-${dia}T15:00:00Z`), servico_descricao: desc, barbeiro_nome: b, comissao_barbeiro: 10 } })
+const CB = planoDe({ plano: 'Cabelo e Barba' }), CRIA = planoDe({ plano: 'Corte de Cria' })
+
+test('Cabelo e Barba: barba num dia e cabelo noutro na mesma semana = 1 visita (comissões somam)', () => {
+    // Anderson: 14/10 (ter) barba, 16/10 (qui) corte -> 1 visita; 20/10 (seg) nova semana
+    const g = agruparVisitas([V('14', 'Barba plano'), V('16', 'Corte+barba plano'), V('20', 'Corte+barba plano')], CB)
+    assert.equal(g.length, 2)
+    assert.equal(g[0].dividida, true)
+    assert.equal(g[0].comissao, 20)
+    // barba + barba na mesma semana não é exceção
+    assert.equal(agruparVisitas([V('14', 'Barba plano'), V('16', 'Barba plano')], CB).length, 2)
+    assert.deepEqual(alertasDoCiclo({}, g, []), [])
+})
+
+test('exceção só vale para Cabelo e Barba e para serviços complementares', () => {
+    assert.equal(agruparVisitas([V('14', 'Barba plano'), V('16', 'Corte maq plano')], CRIA).length, 2)
+    assert.equal(agruparVisitas([V('14', 'Corte maq plano'), V('16', 'Corte maq plano')], CB).length, 2)
+    const al = alertasDoCiclo({}, agruparVisitas([V('14', 'Corte maq plano', 'Jonatas'), V('16', 'Corte maq plano', 'Veloso')], CB), [])
+    assert.equal(al[0].tipo, 'menos_7_dias')
+    assert.deepEqual(al[0].visitas.map(v => `${v.dia} ${v.barbeiro}`), ['2026-10-14 Jonatas', '2026-10-16 Veloso'])
+})
+
+test('alerta de atendimento com pagamento recusado (depois da data da recusa, se houver)', () => {
+    const det = [V('10', 'Corte'), V('20', 'Corte')]
+    const al = alertasDoCiclo({ status_assinatura: 'pagamento_recusado', data_recusa: '2026-10-15' }, agruparVisitas(det, CRIA), det)
+    const r = al.find(a => a.tipo === 'recusado_atendido')
+    assert.deepEqual(r.visitas.map(v => v.dia), ['2026-10-20'])
+    assert.equal(alertasDoCiclo({ status_assinatura: 'ativa' }, agruparVisitas(det, CRIA), det).length, 0)
 })
