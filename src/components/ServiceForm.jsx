@@ -6,11 +6,10 @@ import { BARBERS } from '../data/barbers'
 import { BarberDailyView } from './BarberDailyView'
 import { BarberRanking } from './BarberRanking'
 import { useBarberStats } from '../hooks/useBarberStats'
-import { useSubscribers } from '../hooks/useSubscribers'
-import { useVoucherClients } from '../hooks/useVoucherClients'
-import { ClientePicker } from './ClientePicker'
-import { storeToUnidade, codigoDoTelefone, cadastrarClienteBalcao } from '../hooks/useClientes'
+import { ClienteBloco } from './ClienteBloco'
+import { storeToUnidade, cadastrarClienteBalcao, lancamentosDoCliente } from '../hooks/useClientes'
 import { normalizeTelefone55 } from '../utils/phone'
+import { avisoUsoPlano, servicosDoPlano } from '../utils/usoPlano'
 
 // ==========================================
 // SUBSCRIPTION PLANS
@@ -56,10 +55,15 @@ export function ServiceForm() {
         tipo: 'servico',
         data_manual: '',
         cliente_nome: '',
-        cliente_id: '', // código do cliente escolhido na lista (sem telefone)
-        cliente_telefone: '', // só o que o barbeiro digita na venda de assinatura/vale
         subscriber_code: ''
     })
+    // Cliente: escolhido no bloco do topo (sem telefone) ou "não quis informar" ({ semCadastro: true })
+    const [clienteSel, setClienteSel] = useState(null)
+    // Nome e telefone digitados e ainda não cadastrados: o Lançar cadastra sozinho
+    const [rascunho, setRascunho] = useState({ nome: '', telefone: '' })
+    // Aviso de uso do plano (já usou na semana / passou de 5) e a escolha do barbeiro
+    const [avisoPlano, setAvisoPlano] = useState(null)
+    const [excecaoPlano, setExcecaoPlano] = useState(null)
     const [voucherBalance, setVoucherBalance] = useState(null)
     const [voucherValorPorUso, setVoucherValorPorUso] = useState(null)
     const [fetchingBalance, setFetchingBalance] = useState(false)
@@ -67,30 +71,13 @@ export function ServiceForm() {
     const [selectedPresets, setSelectedPresets] = useState([])
     const [showCustomDesc, setShowCustomDesc] = useState(false)
     const isSubmittingRef = useRef(false)
-    const [subscriberSearch, setSubscriberSearch] = useState('')
-    const [showSubscriberDropdown, setShowSubscriberDropdown] = useState(false)
-    const [voucherSearch, setVoucherSearch] = useState('')
-    const [showVoucherDropdown, setShowVoucherDropdown] = useState(false)
     const [selectedPlan, setSelectedPlan] = useState(null)
-    const [agendamentoSel, setAgendamentoSel] = useState(null)
     const [clienteInfo, setClienteInfo] = useState(null)
     const isRenovacao = formData.tipo === 'renovacao_celcoin'
     const isAssinVenda = formData.tipo === 'venda_assinatura' || isRenovacao
-
-    // Telefone digitado na venda: o servidor devolve só o código do cliente
-    const usaTelefoneDigitado = formData.tipo === 'venda_vale' || isAssinVenda
-    const tel55Digitado = usaTelefoneDigitado ? normalizeTelefone55(formData.cliente_telefone) : ''
-    const [cidDigitado, setCidDigitado] = useState(null)
-    useEffect(() => {
-        setCidDigitado(null)
-        if (!tel55Digitado) return
-        let cancelado = false
-        codigoDoTelefone(tel55Digitado)
-            .then(cid => { if (!cancelado) setCidDigitado(cid) })
-            .catch(err => console.error('resolverCliente:', err))
-        return () => { cancelado = true }
-    }, [tel55Digitado])
-    const cidCliente = cidDigitado || formData.cliente_id || null
+    const cidCliente = clienteSel?.cliente_id || null
+    const assinanteSel = clienteSel?.assinante || null
+    const isAssinantePg = formData.forma_pagamento === 'Assinante'
 
     // Status da assinatura (gravado pela Celcoin em clientes/{código})
     useEffect(() => {
@@ -109,14 +96,52 @@ export function ServiceForm() {
     const [deleteConfirmation, setDeleteConfirmation] = useState(null)
     const [editingLaunch, setEditingLaunch] = useState(null)
     const [editForm, setEditForm] = useState({})
-    // Subscribers from Google Sheets (Club)
-    const { subscribers, loading: subsLoading, error: subsError } = useSubscribers()
-
-    // Voucher Clients from Firestore
-    const { clients: voucherClients, loading: vouchersLoading } = useVoucherClients()
 
     // Derived active barber
     const activeBarber = BARBERS.find(b => b.id === selectedBarberId) || loggedInBarber
+
+    // Escolheu o cliente: assinante ativo já vem com pagamento "Assinante" e confere o uso do plano
+    const escolherCliente = (c) => {
+        setClienteSel(c)
+        setRascunho({ nome: '', telefone: '' })
+        setAvisoPlano(null)
+        setExcecaoPlano(null)
+        const ativo = !!c.assinante?.ativo && formData.tipo === 'servico'
+        const forma = ativo ? 'Assinante' : isAssinantePg ? 'Dinheiro' : formData.forma_pagamento
+        // Trocou de plano para avulso (ou o contrário): os serviços da tela mudam
+        const trocaServicos = forma !== formData.forma_pagamento
+        if (trocaServicos) { setSelectedPresets([]); setShowCustomDesc(false) }
+        setFormData(f => ({
+            ...f,
+            cliente_nome: c.semCadastro ? '' : c.nome || '',
+            subscriber_code: c.assinante?.codigo_cliente || '',
+            ...(trocaServicos ? { servico_descricao: '', valor_bruto: '' } : {}),
+            forma_pagamento: forma,
+        }))
+        if (ativo) {
+            lancamentosDoCliente({ cliente_id: c.cliente_id, nome: c.assinante.nome, codigo: c.assinante.codigo_cliente })
+                .then(l => setAvisoPlano(avisoUsoPlano({ assinante: c.assinante, lancamentos: l, barbeiro: activeBarber?.name })))
+                .catch(err => console.error('aviso do plano:', err))
+        }
+    }
+    const limparCliente = () => {
+        setClienteSel(null)
+        setAvisoPlano(null)
+        setExcecaoPlano(null)
+        if (isAssinantePg) { setSelectedPresets([]); setShowCustomDesc(false) }
+        setFormData(f => ({ ...f, cliente_nome: '', subscriber_code: '', ...(f.forma_pagamento === 'Assinante' ? { servico_descricao: '', valor_bruto: '', forma_pagamento: 'Dinheiro' } : {}) }))
+    }
+    // "Lançar como serviço pago": sai do plano, serviço avulso com o preço normal
+    const cobrarAvulso = () => {
+        setAvisoPlano(null)
+        setExcecaoPlano(null)
+        setSelectedPresets([])
+        setFormData(f => ({ ...f, forma_pagamento: 'Dinheiro', servico_descricao: '', valor_bruto: '' }))
+    }
+    const lancarMesmoAssim = () => {
+        setExcecaoPlano({ tipo: avisoPlano.tipo, texto: avisoPlano.texto })
+        setAvisoPlano(null)
+    }
 
     if (!selectedBarberId && loggedInBarber) {
         setSelectedBarberId(loggedInBarber.id)
@@ -197,13 +222,10 @@ export function ServiceForm() {
         const isValeFixo = formData.forma_pagamento === 'Vale Presente' && voucherValorPorUso
 
         if (newPresets.length > 0) {
+            // Serviços de plano só aparecem com pagamento Assinante; os avulsos, com os outros pagamentos
             const desc = newPresets.map(p => p.desc).join(' + ')
             const total = newPresets.reduce((sum, p) => sum + p.value, 0)
-            const planos = newPresets.filter(p => p.label.includes('plano'))
-            const avulsos = newPresets.filter(p => !p.label.includes('plano'))
-            const onlyPlano = planos.length > 0 && avulsos.length === 0
-            const noPlano = planos.length === 0
-            setFormData({ ...formData, servico_descricao: desc, valor_bruto: isValeFixo ? formData.valor_bruto : total.toString(), tipo: 'servico', forma_pagamento: onlyPlano ? 'Assinante' : ((formData.forma_pagamento === 'Assinante' && (noPlano || avulsos.length > 0)) ? 'Dinheiro' : formData.forma_pagamento) })
+            setFormData({ ...formData, servico_descricao: desc, valor_bruto: isValeFixo ? formData.valor_bruto : total.toString(), tipo: 'servico' })
         } else {
             setFormData({ ...formData, servico_descricao: '', valor_bruto: isValeFixo ? formData.valor_bruto : '' })
         }
@@ -266,24 +288,33 @@ export function ServiceForm() {
         if (!formData.valor_bruto) return alert('Preencha o valor do serviço')
         if (!formData.servico_descricao) return alert('Selecione ou descreva o serviço')
 
-        // Validar assinante: precisa selecionar cliente da lista
-        const planos = selectedPresets.filter(p => p.label.includes('plano'))
-        const avulsos = selectedPresets.filter(p => !p.label.includes('plano'))
-        const isMixed = planos.length > 0 && avulsos.length > 0
-        const needsSubscriber = formData.forma_pagamento === 'Assinante' || isMixed
-        if (needsSubscriber && !formData.cliente_nome) {
-            return alert('Selecione o assinante da lista para lançar com pagamento Assinante.')
-        }
-        if (needsSubscriber && clienteInfo?.status_assinatura === 'cancelada') {
-            return alert('Assinatura CANCELADA: cobrar como avulso.')
-        }
-        if (needsSubscriber && subscribers.length > 0) {
-            const match = subscribers.find(s => s.name.toLowerCase() === formData.cliente_nome.toLowerCase())
-            if (!match) {
-                return alert(`"${formData.cliente_nome}" não está na lista de assinantes. Selecione um assinante válido.`)
+        // Cliente: escolhido, "não quis informar" ou digitado no cadastro (cadastra agora; nunca descarta)
+        const nomeDig = rascunho.nome.trim()
+        const tel55Dig = normalizeTelefone55(rascunho.telefone)
+        if (!clienteSel) {
+            if (nomeDig && rascunho.telefone && !tel55Dig) {
+                return alert('Telefone do cliente inválido (use DDD + número). Corrija, ou apague o telefone para lançar só com o nome.')
             }
-            if (match.status !== 'ativo') {
-                return alert(`"${formData.cliente_nome}" está com assinatura ${match.rawStatus || 'INATIVA'}. Só é possível lançar como Assinante para status "Paga fora do sistema" ou "Capturada na Operadora".`)
+            if (!nomeDig && rascunho.telefone) return alert('Falta o nome do cliente.')
+            if (!nomeDig) return alert('Escolha o cliente (reserva ou busca), cadastre, ou toque em "Cliente não quis informar".')
+            if (!tel55Dig && !confirm(`Lançar com o nome "${nomeDig}" sem cadastro? Sem telefone o cliente não fica salvo.`)) return
+        }
+        const vaiCadastrar = !clienteSel && !!nomeDig && !!tel55Dig
+        const nomeCliente = clienteSel ? (clienteSel.semCadastro ? '' : clienteSel.nome || '') : nomeDig
+        const temCodigo = !!clienteSel?.cliente_id || vaiCadastrar
+
+        // Assinante: só cliente assinante ativo; confere o uso do plano com o serviço escolhido
+        if (isAssinantePg) {
+            if (!assinanteSel) return alert('Pagamento Assinante só para cliente assinante escolhido no topo.')
+            if (!assinanteSel.ativo) return alert(`${nomeCliente}: ${assinanteSel.statusTexto}. Não dá para lançar como assinante; cobrar como serviço avulso.`)
+            if (!excecaoPlano) {
+                try {
+                    const l = await lancamentosDoCliente({ cliente_id: clienteSel.cliente_id, nome: assinanteSel.nome, codigo: assinanteSel.codigo_cliente })
+                    const av = avisoUsoPlano({ assinante: assinanteSel, lancamentos: l, servico: formData.servico_descricao, barbeiro: activeBarber?.name })
+                    if (av) { setAvisoPlano(av); window.scrollTo({ top: 0, behavior: 'smooth' }); return }
+                } catch (err) {
+                    console.error('aviso do plano:', err)
+                }
             }
         }
 
@@ -292,25 +323,16 @@ export function ServiceForm() {
             return alert('Venda de Assinatura ou Vale Presente só pode ser feita com pagamento real (Dinheiro, Pix, Crédito ou Débito).')
         }
 
-        const temCliente = !!formData.cliente_id || !!normalizeTelefone55(formData.cliente_telefone)
-        if (formData.cliente_telefone && !normalizeTelefone55(formData.cliente_telefone) && usaTelefoneDigitado) {
-            return alert('Telefone inválido. Informe DDD + número.')
-        }
-
-        if (isAssinVenda && (!formData.cliente_nome || !temCliente)) {
-            return alert('Para venda de Assinatura: selecione o cliente da lista ou informe Nome e Telefone.')
+        if ((isAssinVenda || formData.tipo === 'venda_vale') && (!nomeCliente || !temCodigo)) {
+            return alert('Para venda de Assinatura ou Vale: escolha o cliente cadastrado ou preencha Nome e Telefone.')
         }
 
         if (isAssinVenda && !selectedPlan) {
             return alert('Selecione o plano da assinatura.')
         }
 
-        if (formData.tipo === 'venda_vale' && (!formData.cliente_nome || !temCliente)) {
-            return alert('Para venda de Vale Presente: selecione o cliente da lista ou informe Nome e Telefone.')
-        }
-
-        if (formData.forma_pagamento === 'Vale Presente' && (!formData.cliente_nome)) {
-            return alert('Selecione um cliente cadastrado para utilizar o Vale Presente.')
+        if (formData.forma_pagamento === 'Vale Presente' && !nomeCliente) {
+            return alert('Escolha o cliente do vale para usar o Vale Presente.')
         }
 
         if (formData.forma_pagamento === 'Vale Presente' && voucherBalance !== null && voucherBalance <= 0) {
@@ -322,20 +344,25 @@ export function ServiceForm() {
         try {
             if (!activeBarber) throw new Error('Nenhum barbeiro selecionado.')
 
-            // Telefone digitado (venda): cadastra se for novo e usa o código; senão, o código da lista
-            let clienteId = formData.cliente_id || null
-            if (tel55Digitado) {
-                const c = await cadastrarClienteBalcao({ nome: formData.cliente_nome, telefone: tel55Digitado, unidade: storeToUnidade(activeBarber.store), barbeiro: activeBarber.name })
-                clienteId = c.cliente_id
+            // Nome e telefone digitados sem "Cadastrar e usar": cadastra agora e liga ao lançamento.
+            // Se falhar, nada é lançado e o que foi digitado continua na tela.
+            let clienteId = clienteSel?.cliente_id || null
+            if (vaiCadastrar) {
+                try {
+                    const c = await cadastrarClienteBalcao({ nome: nomeDig, telefone: tel55Dig, unidade: storeToUnidade(activeBarber.store), barbeiro: activeBarber.name })
+                    clienteId = c.cliente_id
+                } catch (err) {
+                    throw new Error('não foi possível cadastrar o cliente (' + err.message + '). Nada foi lançado; tente de novo')
+                }
             }
 
             // Registrar cliente de vale se for venda de vale
             if (formData.tipo === 'venda_vale') {
                 const valorTotal = parseFloat(formData.valor_bruto)
                 const valorPorUso = parseFloat((valorTotal / 4).toFixed(2))
-                const clientRef = doc(db, 'clientes_vale', formData.cliente_nome.toLowerCase().trim())
+                const clientRef = doc(db, 'clientes_vale', nomeCliente.toLowerCase().trim())
                 await setDoc(clientRef, {
-                    nome: formData.cliente_nome.trim(),
+                    nome: nomeCliente.trim(),
                     cliente_id: clienteId,
                     valor_por_uso: valorPorUso,
                     valor_total: valorTotal,
@@ -375,10 +402,12 @@ export function ServiceForm() {
                 barbeiro_id: activeBarber.id,
                 barbeiro_nome: activeBarber.name,
                 loja_id: activeBarber.store,
-                cliente_nome: formData.cliente_nome || 'Não Informado',
+                cliente_nome: nomeCliente || 'Não Informado',
                 cliente_id: clienteId,
-                agendamento_id: agendamentoSel?.agendamento_id || null,
-                barbeiro_agendado: agendamentoSel?.barbeiro_agendado || null,
+                agendamento_id: clienteSel?.agendamento_id || null,
+                barbeiro_agendado: clienteSel?.barbeiro_agendado || null,
+                // Barbeiro viu o aviso do plano e lançou mesmo assim: vai para os alertas da aba Assinaturas
+                ...(isAssinantePg && excecaoPlano ? { excecao_plano: excecaoPlano } : {}),
                 subscriber_code: formData.subscriber_code || null,
                 created_at: serverTimestamp(),
                 ...(isRenovacao ? { plano: selectedPlan.label, status_celcoin: 'pendente' } : {})
@@ -471,7 +500,7 @@ export function ServiceForm() {
                 try {
                     const r = await chamarFuncao('venderAssinaturaBalcao', {
                         cliente_id: clienteId,
-                        nome: formData.cliente_nome.trim(),
+                        nome: nomeCliente.trim(),
                         plano: selectedPlan.label,
                         plano_id: selectedPlan.id,
                         valor: parseFloat(formData.valor_bruto),
@@ -493,7 +522,7 @@ export function ServiceForm() {
                 const webhookData = {
                     evento: formData.tipo === 'venda_vale' ? 'compra_vale' : 'uso_vale',
                     cliente_id: clienteId,
-                    cliente_nome: formData.cliente_nome.trim(),
+                    cliente_nome: nomeCliente.trim(),
                     valor: parseFloat(formData.valor_bruto),
                     barbeiro: activeBarber.name,
                     loja: activeBarber.store,
@@ -511,12 +540,15 @@ export function ServiceForm() {
                 chamarFuncao('notificarVale', webhookData).catch(err => console.error('notificarVale:', err))
             }
 
-            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', cliente_id: '', cliente_telefone: '', subscriber_code: '' })
-            setSelectedPresets([])
+            setFormData({ ...formData, servico_descricao: '', valor_bruto: '', data_manual: '', cliente_nome: '', subscriber_code: '', forma_pagamento: isAssinantePg ? 'Dinheiro' : formData.forma_pagamento })
+            setClienteSel(null)
+            setRascunho({ nome: '', telefone: '' })
+            setAvisoPlano(null)
+            setExcecaoPlano(null)
+                setSelectedPresets([])
             setShowCustomDesc(false)
             setVoucherBalance(null)
             setSelectedPlan(null)
-            setAgendamentoSel(null)
             setSplitPayment(false)
             setSplitValor1('')
         } catch (e) {
@@ -616,10 +648,46 @@ export function ServiceForm() {
                             </div>
                         )}
 
-                        {/* Service Preset Chips (multi-select) */}
+                        {/* 1. Cliente */}
+                        <ClienteBloco
+                            valor={clienteSel}
+                            onEscolher={escolherCliente}
+                            onLimpar={limparCliente}
+                            rascunho={rascunho}
+                            onRascunho={setRascunho}
+                            unidade={storeToUnidade(activeBarber?.store)}
+                            barbeiroNome={activeBarber?.name}
+                            hoje={today}
+                            verTodasUnidades={isAdmin}
+                        />
+
+                        {/* Aviso de uso do plano */}
+                        {avisoPlano && (
+                            <div className="bg-orange-950/40 border border-orange-600 rounded-xl p-3 space-y-3">
+                                <div className="text-sm text-orange-100 font-medium">⚠️ {avisoPlano.texto}</div>
+                                <div className="grid grid-cols-1 gap-2">
+                                    <button type="button" onClick={cobrarAvulso}
+                                        className="w-full bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 rounded-lg text-base">Lançar como serviço pago</button>
+                                    <button type="button" onClick={lancarMesmoAssim}
+                                        className="w-full bg-gray-800 hover:bg-gray-700 text-gray-200 font-medium py-3 rounded-lg text-sm">Lançar mesmo assim (fica como exceção)</button>
+                                </div>
+                            </div>
+                        )}
+                        {excecaoPlano && isAssinantePg && (
+                            <div className="text-xs text-orange-300 bg-orange-950/20 border border-orange-900/50 rounded-lg px-3 py-2">
+                                Exceção: vai aparecer nos alertas da aba Assinaturas com o seu nome.
+                            </div>
+                        )}
+                        {assinanteSel && !assinanteSel.ativo && formData.tipo === 'servico' && (
+                            <div className="text-sm font-bold text-red-200 bg-red-900/40 border border-red-700 rounded-lg px-3 py-2">
+                                Assinatura: {assinanteSel.statusTexto}. Não dá para lançar como assinante; cobrar como serviço avulso.
+                            </div>
+                        )}
+
+                        {/* 2. Serviço */}
                         <div>
                             <div className="flex items-center justify-between mb-2">
-                                <label className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Servico</label>
+                                <label className="text-xs text-gray-500 uppercase tracking-wider font-semibold">2. Serviço {isAssinantePg && <span className="text-purple-400 normal-case">(do plano)</span>}</label>
                                 {selectedPresets.length > 1 && (
                                     <span className="text-[10px] text-cyan-400 font-bold bg-cyan-900/30 px-2 py-0.5 rounded-full">
                                         {selectedPresets.length} selecionados
@@ -638,15 +706,18 @@ export function ServiceForm() {
                                 </div>
                             ) : (
                                 <>
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {SERVICE_PRESETS.map(preset => {
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {/* Assinante: só os serviços do plano dele; outros pagamentos: só os avulsos */}
+                                        {SERVICE_PRESETS.filter(p => isAssinantePg
+                                            ? assinanteSel && servicosDoPlano(assinanteSel).includes(p.label)
+                                            : !p.label.includes('plano')).map(preset => {
                                             const isActive = selectedPresets.some(p => p.label === preset.label)
                                             return (
                                                 <button
                                                     key={preset.label}
                                                     type="button"
                                                     onClick={() => handlePresetToggle(preset)}
-                                                    className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all active:scale-95 ${isActive
+                                                    className={`px-2 py-3 rounded-lg text-sm font-medium transition-all active:scale-95 ${isActive
                                                         ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/30 ring-1 ring-cyan-400/30'
                                                         : 'bg-gray-950 border border-gray-800 text-gray-300 hover:border-gray-600'
                                                         }`}
@@ -658,16 +729,16 @@ export function ServiceForm() {
                                                 </button>
                                             )
                                         })}
-                                        <button
+                                        {!isAssinantePg && <button
                                             type="button"
                                             onClick={handleCustomService}
-                                            className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all ${showCustomDesc
+                                            className={`px-2 py-3 rounded-lg text-sm font-medium transition-all ${showCustomDesc
                                                 ? 'bg-cyan-600 text-white shadow-lg'
                                                 : 'bg-gray-950 border border-gray-800 text-gray-500 hover:border-gray-600'
                                                 }`}
                                         >
                                             Outro...
-                                        </button>
+                                        </button>}
                                     </div>
                                     {/* Combined description preview */}
                                     {selectedPresets.length > 0 && (
@@ -717,18 +788,20 @@ export function ServiceForm() {
                                         value={formData.tipo}
                                         onChange={e => {
                                             const newTipo = e.target.value
+                                            // Assinante só vale para serviço
+                                            const forma_pagamento = newTipo !== 'servico' && isAssinantePg ? 'Dinheiro' : formData.forma_pagamento
                                             if (newTipo === 'venda_vale') {
                                                 setSelectedPresets([])
                                                 setShowCustomDesc(false)
-                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: 'Compra de pacote' })
+                                                setFormData({ ...formData, forma_pagamento, tipo: newTipo, servico_descricao: 'Compra de pacote' })
                                             } else if (newTipo === 'venda_assinatura' || newTipo === 'renovacao_celcoin') {
                                                 setSelectedPresets([])
                                                 setShowCustomDesc(false)
                                                 setSelectedPlan(null)
-                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: newTipo === 'renovacao_celcoin' ? 'Renovação assinatura Celcoin' : 'Venda de assinatura', valor_bruto: '' })
+                                                setFormData({ ...formData, forma_pagamento, tipo: newTipo, servico_descricao: newTipo === 'renovacao_celcoin' ? 'Renovação assinatura Celcoin' : 'Venda de assinatura', valor_bruto: '' })
                                             } else {
                                                 setSelectedPlan(null)
-                                                setFormData({ ...formData, tipo: newTipo, servico_descricao: newTipo === 'servico' ? '' : formData.servico_descricao })
+                                                setFormData({ ...formData, forma_pagamento, tipo: newTipo, servico_descricao: newTipo === 'servico' ? '' : formData.servico_descricao })
                                             }
                                         }}
                                         disabled={formData.forma_pagamento === 'Vale Presente' && !!voucherValorPorUso}
@@ -741,24 +814,6 @@ export function ServiceForm() {
                                     </select>
                                 </div>
                             </div>
-
-                            {/* Captura de Telefone (para Venda de Vale e Venda de Assinatura) */}
-                            {(formData.tipo === 'venda_vale' || isAssinVenda) && (
-                                <div className="space-y-1 animate-in fade-in slide-in-from-top-2">
-                                    <label className="block text-xs text-cyan-400 font-bold uppercase tracking-wider">
-                                        Telefone do Cliente {formData.cliente_id ? '(cliente já selecionado na lista)' : '(Obrigatório)'}
-                                    </label>
-                                    <div className="relative">
-                                        <Phone className="absolute left-3 top-2.5 text-cyan-600" size={16} />
-                                        <input
-                                            placeholder="(00) 00000-0000"
-                                            className="w-full bg-gray-950 border border-cyan-900/50 rounded-lg py-2.5 pl-10 pr-3 text-gray-200 outline-none focus:border-cyan-500"
-                                            value={formData.cliente_telefone}
-                                            onChange={e => setFormData({ ...formData, cliente_telefone: e.target.value })}
-                                        />
-                                    </div>
-                                </div>
-                            )}
 
                             {/* Seleção de Plano (apenas para Venda de Assinatura) */}
                             {isAssinVenda && (
@@ -786,232 +841,46 @@ export function ServiceForm() {
                                 </div>
                             )}
 
-                            {/* Client Name */}
-                            {(() => {
-                                const isAssinante = formData.forma_pagamento === 'Assinante'
-                                const planos = selectedPresets.filter(p => p.label.includes('plano'))
-                                const avulsos = selectedPresets.filter(p => !p.label.includes('plano'))
-                                const isMixed = planos.length > 0 && avulsos.length > 0
-                                const needsSubscriber = isAssinante || isMixed
-
-                                if (needsSubscriber) {
-                                    const filtered = subscribers.filter(s =>
-                                        s.status === 'ativo' &&
-                                        s.name.toLowerCase().includes(subscriberSearch.toLowerCase())
-                                    )
-                                    const activeCount = subscribers.filter(s => s.status === 'ativo').length
-                                    return (
-                                        <div className="relative">
-                                            <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
-                                                <UserCheck size={12} className="text-purple-400" />
-                                                Assinante <span className="text-red-400">*</span>
-                                                {subsLoading && <span className="text-gray-600 ml-1">(carregando...)</span>}
-                                                {subsError && <span className="text-red-500 ml-1 flex items-center gap-0.5"><AlertTriangle size={10} /> erro</span>}
-                                            </label>
-                                            {formData.cliente_nome ? (
-                                                <div className="flex items-center gap-2 bg-purple-900/20 border border-purple-700/50 rounded-lg py-2 px-3">
-                                                    <UserCheck size={16} className="text-purple-400" />
-                                                    <span className="text-purple-300 text-sm font-medium flex-1">{formData.cliente_nome}</span>
-                                                    <button type="button"
-                                                        onClick={() => { setFormData({ ...formData, cliente_nome: '', cliente_id: '', cliente_telefone: '', subscriber_code: '' }); setSubscriberSearch('') }}
-                                                        className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
-                                                    >trocar</button>
-                                                </div>
-                                            ) : (
-                                                <>
-                                                    <div className="relative">
-                                                        <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
-                                                        <input
-                                                            placeholder={`Buscar assinante (${activeCount} ativos)`}
-                                                            className="w-full bg-gray-950 border border-purple-700/50 rounded-lg py-2 pl-8 pr-3 text-gray-200 outline-none focus:border-purple-500 text-sm"
-                                                            value={subscriberSearch}
-                                                            onChange={e => { setSubscriberSearch(e.target.value); setShowSubscriberDropdown(true) }}
-                                                            onFocus={() => setShowSubscriberDropdown(true)}
-                                                        />
-                                                    </div>
-                                                    {showSubscriberDropdown && (
-                                                        <div className="absolute z-50 w-full mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-h-48 overflow-y-auto">
-                                                            {filtered.length === 0 ? (
-                                                                <div className="px-3 py-3 text-gray-500 text-xs text-center">
-                                                                    {subscriberSearch ? 'Nenhum assinante encontrado' : 'Digite para buscar'}
-                                                                </div>
-                                                            ) : (
-                                                                filtered.slice(0, 20).map((sub, i) => (
-                                                                    <button type="button" key={i}
-                                                                        onClick={() => {
-                                                                            setFormData({ ...formData, cliente_nome: sub.name, cliente_id: sub.cliente_id || '', cliente_telefone: '', subscriber_code: sub.code || '' })
-                                                                            setSubscriberSearch('')
-                                                                            setShowSubscriberDropdown(false)
-                                                                        }}
-                                                                        className="w-full text-left px-3 py-2 hover:bg-purple-900/20 transition-colors flex items-center justify-between gap-2 border-b border-gray-800/50 last:border-0"
-                                                                    >
-                                                                        <span className="text-sm text-gray-200 truncate">{sub.name} {sub.code && <span className="text-gray-600">#{sub.code}</span>}</span>
-                                                                        {sub.plano && <span className="text-[10px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded shrink-0">{sub.plano}</span>}
-                                                                    </button>
-                                                                ))
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </>
-                                            )}
-                                        </div>
-                                    )
-                                }
-
-                                if (formData.forma_pagamento === 'Vale Presente') {
-                                    const filtered = voucherClients.filter(c =>
-                                        c.nome.toLowerCase().includes(voucherSearch.toLowerCase())
-                                    )
-                                    return (
-                                        <div className="relative">
-                                            <label className="block text-xs text-gray-500 mb-1 flex items-center justify-between">
-                                                <div className="flex items-center gap-1">
-                                                    <CreditCard size={12} className="text-pink-400" />
-                                                    Cliente Vale <span className="text-red-400">*</span>
-                                                </div>
-                                                {voucherBalance !== null && (
-                                                    <span className={`font-bold ${voucherBalance > 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                                        {fetchingBalance ? '...' : `Saldo: ${voucherBalance} usos`}
-                                                    </span>
-                                                )}
-                                            </label>
-                                            {formData.cliente_nome ? (
-                                                <div className="flex items-center gap-2 bg-pink-900/20 border border-pink-700/50 rounded-lg py-2 px-3">
-                                                    <div className="flex-1">
-                                                        <div className="text-pink-300 text-sm font-bold">{formData.cliente_nome}</div>
-                                                    </div>
-                                                    <button type="button"
-                                                        onClick={() => {
-                                                            setFormData({ ...formData, cliente_nome: '', cliente_id: '', cliente_telefone: '', valor_bruto: '' })
-                                                            setVoucherSearch('')
-                                                            setVoucherBalance(null)
-                                                            setVoucherValorPorUso(null)
-                                                        }}
-                                                        className="text-gray-500 hover:text-red-400 text-xs px-2 py-0.5 rounded bg-gray-800 hover:bg-red-900/30 transition-colors"
-                                                    >trocar</button>
-                                                </div>
-                                            ) : (
-                                                <>
-                                                    <div className="relative">
-                                                        <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
-                                                        <input
-                                                            placeholder="Buscar cliente do vale..."
-                                                            className="w-full bg-gray-950 border border-pink-700/50 rounded-lg py-2 pl-8 pr-3 text-gray-200 outline-none focus:border-pink-500 text-sm"
-                                                            value={voucherSearch}
-                                                            onChange={e => { setVoucherSearch(e.target.value); setShowVoucherDropdown(true) }}
-                                                            onFocus={() => setShowVoucherDropdown(true)}
-                                                        />
-                                                    </div>
-                                                    {showVoucherDropdown && (
-                                                        <div className="absolute z-50 w-full mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-h-48 overflow-y-auto">
-                                                            {filtered.length === 0 ? (
-                                                                <div className="px-3 py-4 text-center">
-                                                                    <p className="text-gray-500 text-xs mb-2">Nenhum cliente de vale encontrado</p>
-                                                                    {voucherSearch && (
-                                                                        <button type="button"
-                                                                            onClick={() => {
-                                                                                setFormData({ ...formData, cliente_nome: voucherSearch })
-                                                                                setShowVoucherDropdown(false)
-                                                                            }}
-                                                                            className="text-[10px] bg-gray-800 text-gray-300 px-2 py-1 rounded hover:bg-gray-700"
-                                                                        >Usar "{voucherSearch}" (avulso)</button>
-                                                                    )}
-                                                                </div>
-                                                            ) : (
-                                                                filtered.map((cl, i) => (
-                                                                    <button type="button" key={i}
-                                                                        onClick={() => {
-                                                                            setFormData({ ...formData, cliente_nome: cl.nome, cliente_id: cl.cliente_id || '', cliente_telefone: '' })
-                                                                            setVoucherSearch('')
-                                                                            setShowVoucherDropdown(false)
-                                                                        }}
-                                                                        className="w-full text-left px-3 py-2 hover:bg-pink-900/20 transition-colors flex items-center justify-between gap-2 border-b border-gray-800/50 last:border-0"
-                                                                    >
-                                                                        <div>
-                                                                            <div className="text-sm text-gray-200 font-medium">{cl.nome}</div>
-                                                                        </div>
-                                                                    </button>
-                                                                ))
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </>
-                                            )}
-                                        </div>
-                                    )
-                                }
-
-                                return (
-                                    <ClientePicker
-                                        value={formData.cliente_nome ? { nome: formData.cliente_nome, cliente_id: formData.cliente_id } : null}
-                                        unidade={storeToUnidade(activeBarber?.store)}
-                                        barbeiroNome={activeBarber?.name}
-                                        hoje={today}
-                                        onChange={c => {
-                                            setFormData({ ...formData, cliente_nome: c?.nome || '', cliente_id: c?.cliente_id || '', cliente_telefone: '' })
-                                            setAgendamentoSel(c?.agendamento_id ? c : null)
-                                        }}
-                                    />
-                                )
-                            })()}
-
-                            {clienteInfo?.status_assinatura === 'cancelada' && (
-                                <div className="text-sm font-bold text-red-200 bg-red-900/50 border border-red-700 rounded-lg px-3 py-2">
-                                    Assinatura CANCELADA: cobrar como avulso
-                                </div>
-                            )}
-                            {clienteInfo?.status_assinatura === 'pagamento_recusado' && (
-                                <div className="text-sm font-bold text-yellow-200 bg-yellow-900/40 border border-yellow-700 rounded-lg px-3 py-2">
-                                    Pagamento da assinatura recusado: falar com o Adriano antes de atender como assinante
-                                </div>
-                            )}
                             {formData.tipo === 'venda_assinatura' && clienteInfo?.celcoin && (
                                 <div className="text-sm font-bold text-purple-200 bg-purple-900/40 border border-purple-700 rounded-lg px-3 py-2">
                                     Cliente da Celcoin: use Renovação assinante Celcoin
                                 </div>
                             )}
 
-                            {/* Payment Buttons */}
+                            {/* 3. Pagamento */}
                             <div>
-                                <label className="block text-xs text-gray-500 mb-2 uppercase tracking-wider font-semibold">Pagamento</label>
-                                {(() => {
-                                    const planos = selectedPresets.filter(p => p.label.includes('plano'))
-                                    const avulsos = selectedPresets.filter(p => !p.label.includes('plano'))
-                                    const onlyPlano = planos.length > 0 && avulsos.length === 0
-                                    const isMixed = planos.length > 0 && avulsos.length > 0
-                                    return (
-                                        <>
-                                            {isMixed && (
-                                                <div className="text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-800/40 rounded-lg px-3 py-2 mb-2">
-                                                    ⚡ Mix plano + avulso: será separado em 2 lançamentos. Escolha o pagamento do serviço avulso ({avulsos.map(p => p.label).join(', ')}).
-                                                </div>
-                                            )}
-                                            <div className="grid grid-cols-3 gap-2">
-                                                {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
-                                                    const noPlano = planos.length === 0
-                                                    const isVendaVale = formData.tipo === 'venda_vale'
-                                                    const isVendaAssinatura = isAssinVenda
-                                                    const isVendaEspecial = isVendaVale || isVendaAssinatura
-                                                    const disabled = (onlyPlano && pm !== 'Assinante') || (isMixed && (pm === 'Assinante' || pm === 'Vale Presente')) || (noPlano && pm === 'Assinante') || (isVendaEspecial && (pm === 'Vale Presente' || pm === 'Assinante'))
-                                                    return (
-                                                        <button type="button" key={pm}
-                                                            onClick={() => !disabled && setFormData({ ...formData, forma_pagamento: pm })}
-                                                            disabled={disabled}
-                                                            className={`text-sm py-2.5 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm && !disabled
-                                                                ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
-                                                                : disabled
-                                                                    ? 'bg-gray-950 border-gray-800 text-gray-700 cursor-not-allowed opacity-40'
-                                                                    : 'bg-gray-950 border-gray-800 text-gray-400'
-                                                                }`}
-                                                        >
-                                                            {pm}
-                                                        </button>
-                                                    )
-                                                })}
-                                            </div>
-                                        </>
-                                    )
-                                })()}
+                                <label className="block text-xs text-gray-500 mb-2 uppercase tracking-wider font-semibold">3. Pagamento</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {['Dinheiro', 'Pix', 'Crédito', 'Débito', 'Vale Presente', 'Assinante'].map(pm => {
+                                        const isVendaEspecial = formData.tipo === 'venda_vale' || isAssinVenda
+                                        // Assinante só para cliente assinante ativo escolhido no topo
+                                        const disabled = (pm === 'Assinante' && !(assinanteSel?.ativo && formData.tipo === 'servico')) || (isVendaEspecial && (pm === 'Vale Presente' || pm === 'Assinante'))
+                                        const escolher = () => {
+                                            if (disabled) return
+                                            // Entrar ou sair do plano troca a lista de serviços
+                                            const trocaServicos = (pm === 'Assinante') !== isAssinantePg
+                                            if (trocaServicos) { setSelectedPresets([]); setShowCustomDesc(false); setExcecaoPlano(null) }
+                                            setFormData({ ...formData, forma_pagamento: pm, ...(trocaServicos ? { servico_descricao: '', valor_bruto: '' } : {}) })
+                                        }
+                                        return (
+                                            <button type="button" key={pm} onClick={escolher} disabled={disabled}
+                                                className={`text-sm py-3 px-2 rounded-lg border transition-all active:scale-95 ${formData.forma_pagamento === pm && !disabled
+                                                    ? 'bg-cyan-900/40 border-cyan-500 text-cyan-400 font-bold'
+                                                    : disabled
+                                                        ? 'bg-gray-950 border-gray-800 text-gray-700 cursor-not-allowed opacity-40'
+                                                        : 'bg-gray-950 border-gray-800 text-gray-400'
+                                                    }`}
+                                            >
+                                                {pm}
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                                {formData.forma_pagamento === 'Vale Presente' && (
+                                    <div className={`mt-2 text-sm font-bold rounded-lg px-3 py-2 border ${!formData.cliente_nome ? 'text-gray-400 border-gray-800' : voucherBalance > 0 ? 'text-green-300 border-green-800/60 bg-green-950/20' : 'text-red-300 border-red-800/60 bg-red-950/20'}`}>
+                                        {!formData.cliente_nome ? 'Escolha o cliente do vale no topo.' : fetchingBalance ? 'Conferindo saldo do vale...' : `Saldo do vale: ${voucherBalance ?? 0} usos`}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Split Payment */}
@@ -1090,9 +959,9 @@ export function ServiceForm() {
 
                             {/* Submit */}
                             <button type="submit" disabled={loading}
-                                className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-cyan-900/20 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2 text-base"
+                                className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-cyan-900/20 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2 text-base"
                             >
-                                <Save size={18} /> {loading ? 'Salvando...' : `Lancar`}
+                                <Save size={18} /> {loading ? 'Salvando...' : '4. Lançar'}
                             </button>
                         </form>
                     </div>

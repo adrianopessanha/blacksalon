@@ -125,7 +125,7 @@ export function cicloDe(diaCobranca, mes, hoje = new Date()) {
     return { inicio, fim }
 }
 
-const diaDoInicio = (a) => { const d = parseInt(String(a.ciclo_desde || a.inicio_contrato || a.vencimento || '').slice(8, 10), 10); return Number.isFinite(d) ? d : 1 }
+export const diaDoInicio = (a) => { const d = parseInt(String(a.ciclo_desde || a.inicio_contrato || a.vencimento || '').slice(8, 10), 10); return Number.isFinite(d) ? d : 1 }
 
 // Como um lançamento de assinante se liga a um assinante. Ordem: vínculo manual > telefone > código > nome.
 // Ligação só por nome fica "a conferir".
@@ -289,6 +289,14 @@ export function alertasDoCiclo(a, grupos, visitasDet, hoje = new Date()) {
     const atendidoDesde = (desde, tipo, texto) => {
         const depois = visitasDet.filter(({ l }) => { const d = toDate(l.data); return d && (!desde || diaSP(d) >= desde) })
         if (depois.length) alertas.push({ tipo, texto, visitas: depois.map(({ l }) => ({ dia: diaSP(toDate(l.data)), barbeiro: l.barbeiro_nome || null })) })
+    }
+    // Barbeiro viu o aviso de uso do plano e lançou mesmo assim
+    for (const { l } of visitasDet) {
+        const d = toDate(l.data)
+        if (l.excecao_plano && d) {
+            const motivo = l.excecao_plano.tipo === 'mais_de_5' ? 'passou de 5 visitas no ciclo' : 'já tinha usado o plano na semana'
+            alertas.push({ tipo: 'excecao_lancada', texto: `Lançado como exceção (${motivo}) por ${l.barbeiro_nome || '?'}`, visitas: [{ dia: diaSP(d), barbeiro: l.barbeiro_nome || null }] })
+        }
     }
     if (a.status_assinatura === 'pagamento_recusado') atendidoDesde(a.data_recusa || null, 'recusado_atendido', 'Atendido com pagamento recusado')
     if (statusEfetivo(a, hoje) === 'vencido') {

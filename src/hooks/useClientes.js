@@ -34,22 +34,49 @@ export function useAgendamentosDoDia(dataStr) {
     return { agendamentos, loading, error }
 }
 
-// IDs de agendamento que já viraram lançamento no dia (AAAA-MM-DD, horário local)
+// O que já virou lançamento no dia (AAAA-MM-DD, horário local): reservas usadas e clientes lançados
 export function useAgendamentosAtendidos(dataStr) {
-    const [ids, setIds] = useState(() => new Set())
+    const [atendidos, setAtendidos] = useState(() => ({ ags: new Set(), clientes: new Set() }))
 
     useEffect(() => {
         if (!dataStr) return
         const [y, m, d] = dataStr.split('-').map(Number)
         const q = query(collection(db, 'lancamentos'), where('data', '>=', Timestamp.fromDate(new Date(y, m - 1, d))))
         return onSnapshot(q, snap => {
-            const s = new Set()
-            snap.forEach(doc => { const id = doc.data().agendamento_id; if (id) s.add(id) })
-            setIds(s)
+            const ags = new Set(), clientes = new Set()
+            snap.forEach(doc => {
+                const l = doc.data()
+                if (l.agendamento_id) ags.add(l.agendamento_id)
+                if (l.cliente_id) clientes.add(l.cliente_id)
+            })
+            setAtendidos({ ags, clientes })
         }, err => console.error('lancamentos do dia:', err))
     }, [dataStr])
 
-    return ids
+    return atendidos
+}
+
+// Clientes e clientes de vale (sem telefone), em tempo real, para a busca do Lançamento
+export function useClientesEVales() {
+    const [clientes, setClientes] = useState([])
+    const [vales, setVales] = useState([])
+    useEffect(() => {
+        const u1 = onSnapshot(collection(db, 'clientes'), s => setClientes(s.docs.filter(d => d.id.startsWith('c_')).map(d => ({ id: d.id, ...d.data() }))), e => console.error('clientes:', e))
+        const u2 = onSnapshot(collection(db, 'clientes_vale'), s => setVales(s.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error('clientes_vale:', e))
+        return () => { u1(); u2() }
+    }, [])
+    return { clientes, vales }
+}
+
+// Lançamentos de um cliente para o aviso de uso do plano: pelo código, vínculo manual, código Celcoin e nome
+export async function lancamentosDoCliente({ cliente_id, nome, codigo }) {
+    const consultas = [where('cliente_id', '==', cliente_id), where('assinante_id', '==', cliente_id)]
+    if (nome) consultas.push(where('cliente_nome', '==', nome))
+    if (codigo) consultas.push(where('subscriber_code', '==', String(codigo)))
+    const snaps = await Promise.all(consultas.map(c => getDocs(query(collection(db, 'lancamentos'), c))))
+    const porId = new Map()
+    for (const s of snaps) s.forEach(d => porId.set(d.id, { id: d.id, ...d.data() }))
+    return [...porId.values()]
 }
 
 // Admin vem de usuarios/{uid}.admin; enquanto carrega, trata como não-admin
