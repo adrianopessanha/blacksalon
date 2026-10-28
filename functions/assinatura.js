@@ -66,12 +66,6 @@ function classificarSemTransacao(evento, status) {
     if (["recusada", "recusado"].includes(e)) return "recusado";
     return classificar(status, false, true);
 }
-// Só https (o link vai para a mensagem de WhatsApp do cliente)
-function linkValido(v) {
-    const s = String(v || "").trim();
-    return /^https:\/\/\S+$/i.test(s) && s.length <= 500 ? s : null;
-}
-
 function parsePagamento(body) {
     const b = body || {};
     const telefone = String(b.telefone || "").replace(/\D/g, "");
@@ -105,8 +99,6 @@ function parsePagamento(body) {
         codigoCliente: String(b.codigo_cliente || "").trim() || null,
         email: String(b.email || "").trim() || null,
         documento: String(b.documento || "").trim() || null,
-        // Subscription.paymentLink: link da conta do assinante para regularizar o cartão
-        linkPagamento: linkValido(b.link_pagamento || b.paymentLink || b["Subscription.paymentLink"]),
         dataPagamento: data,
         dataStr,
     };
@@ -159,8 +151,6 @@ function atualizacaoAssinante(p, planoMapa = {}, statusAtual = null) {
     const dataEvento = p.dataStr || dataSP(new Date());
     if (p.classe === "cobranca_cancelada") upd.data_cobranca_cancelada = dataEvento;
     if (p.codigoCliente) upd.codigo_cliente = p.codigoCliente;
-    // Link de pagamento: o mais recente vale (só admin lê assinantes; não vai para a visão pública)
-    if (p.linkPagamento) { upd.link_pagamento = p.linkPagamento; upd.link_pagamento_em = dataEvento; }
     if (DATA_DO_EVENTO[p.classe]) upd[DATA_DO_EVENTO[p.classe]] = dataEvento;
     if (p.nome) upd.nome = p.nome;
     const planoDoCodigo = p.planoId ? planoMapa[p.planoId] : null;

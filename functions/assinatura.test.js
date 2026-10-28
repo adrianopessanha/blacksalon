@@ -147,12 +147,3 @@ test("waitingPayment/active não rebaixam assinante que já está ativo; novo fi
     assert.equal(atualizacaoAssinante(a, {}, "cancelada").status_assinatura, "aguardando_pagamento");
     assert.equal(parsePagamento({ telefone: "5521986207196", status: "overdue" }).classe, "evento");
 });
-test("link de pagamento da Celcoin vai para o assinante (só https)", () => {
-    const p = parsePagamento({ ...base, status: "Negada na Operadora", "Subscription.paymentLink": "https://pay.exemplo.com/abc" });
-    assert.equal(p.linkPagamento, "https://pay.exemplo.com/abc");
-    const upd = atualizacaoAssinante(p);
-    assert.equal(upd.link_pagamento, "https://pay.exemplo.com/abc");
-    assert.equal(upd.link_pagamento_em, "2026-10-21");
-    assert.equal(parsePagamento({ ...base, status: "x", link_pagamento: "javascript:alert(1)" }).linkPagamento, null);
-    assert.equal(atualizacaoAssinante(parsePagamento({ ...base, status: "Capturada na Operadora" })).link_pagamento, undefined);
-});

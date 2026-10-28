@@ -43,15 +43,13 @@ export const contatoValido = (data, desde) => (data && (!desde || data >= desde)
 const nomePlano = (s) => (s.plano?.id?.startsWith('outro') ? '' : s.plano?.label || '')
 
 export function mensagemWhatsApp(grupo, s) {
-    const link = s.link_pagamento || null
-    const modelo = grupo === 'recusado' ? MENSAGENS_WHATSAPP[link ? 'recusado' : 'recusado_sem_link'] : MENSAGENS_WHATSAPP[grupo]
+    const modelo = MENSAGENS_WHATSAPP[grupo]
     if (!modelo) return null
     const plano = nomePlano(s)
     return modelo
         .replace(/\[nome\]/g, primeiroNome(s.nome))
         .replace(/ ?\[plano\]/g, plano ? ' ' + plano : '')
         .replace(/\[data\]/g, ddmm(s.vencimento))
-        .replace(/\[link\]/g, link || '')
 }
 
 // telefone já vem como 55 + DDD + número

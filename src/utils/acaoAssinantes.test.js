@@ -22,12 +22,10 @@ test('grupos: recusado, vencido, conferir (não pagou sem recusa/vencimento), pa
     assert.deepEqual(precisaDeAcao([s({})], hoje), [])
 })
 
-test('mensagens: primeiro nome, plano, data e link; sem link usa o texto sem link', () => {
-    const sem = mensagemWhatsApp('recusado', s({}))
-    assert.ok(sem.startsWith('Fala, João!'))
-    assert.ok(!sem.includes('[link]') && !sem.includes('http'))
-    const com = mensagemWhatsApp('recusado', s({ link_pagamento: 'https://pay.x/1' }))
-    assert.ok(com.includes('https://pay.x/1'))
+test('mensagens: primeiro nome, plano e data; recusado vai sem link', () => {
+    const recusado = mensagemWhatsApp('recusado', s({}))
+    assert.ok(recusado.startsWith('Fala, João!'))
+    assert.ok(!recusado.includes('[') && !recusado.includes('http'))
     assert.ok(mensagemWhatsApp('vencido', s({ vencimento: '2026-10-20' })).includes('Seu plano Corte de Cria venceu dia 20/10.'))
     assert.ok(mensagemWhatsApp('vencido', s({ vencimento: '2026-10-20', plano: { id: 'outro_90' } })).includes('Seu plano venceu dia 20/10.'))
     assert.equal(mensagemWhatsApp('fora_regra', s({})), null)

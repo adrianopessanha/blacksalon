@@ -4,7 +4,7 @@ import { db, collection, query, where, getDocs, doc, setDoc, updateDoc } from '.
 import { getDoc } from 'firebase/firestore'
 import { getApp } from 'firebase/app'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { RefreshCw, Pencil, Check, X, TrendingUp, Users, Tag, Search, ArrowUp, ArrowDown, Minus, AlertTriangle, MessageCircle, Copy, Link2, ChevronDown } from 'lucide-react'
+import { RefreshCw, Pencil, Check, X, TrendingUp, Users, Tag, Search, ArrowUp, ArrowDown, Minus, AlertTriangle, MessageCircle, Link2, ChevronDown } from 'lucide-react'
 import { TAXAS_ONLINE } from '../config/taxas'
 import { formatTelefone, semAcento } from '../utils/phone'
 import { lancamentoComTelefone } from '../utils/privado'
@@ -569,7 +569,6 @@ function GrupoAcao({ g, dados, onMudou, contatar, contatoDe }) {
 function ItemAcao({ grupo, item, dados, onMudou, contatar, contatado }) {
     const { s } = item
     const [vincular, setVincular] = useState(false)
-    const [copiado, setCopiado] = useState(false)
     const valor = s.valor ?? s.plano?.preco
     const detalhe = {
         recusado: `${item.dias == null ? 'recusado' : item.dias === 0 ? 'recusou hoje' : `recusou há ${item.dias} dia${item.dias === 1 ? '' : 's'}`}${valor ? ` · ${fmt(Number(valor))}` : ''}`,
@@ -577,9 +576,6 @@ function ItemAcao({ grupo, item, dados, onMudou, contatar, contatado }) {
         conferir: `ciclo desde ${ddmm(diaSP(s.ciclo.inicio))} · nenhum pagamento ligado`,
         pagou_nao_veio: `ciclo ${ddmm(diaSP(s.ciclo.inicio))}–${ddmm(diaSP(s.ciclo.fim))} · nenhuma visita`,
     }[grupo]
-    const copiarLink = () => navigator.clipboard.writeText(s.link_pagamento)
-        .then(() => { setCopiado(true); setTimeout(() => setCopiado(false), 2000) })
-        .catch(e => alert('Não copiou: ' + e.message))
 
     return (
         <div className="bg-gray-950 border border-gray-800 rounded-xl p-3">
@@ -595,13 +591,6 @@ function ItemAcao({ grupo, item, dados, onMudou, contatar, contatado }) {
                     className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-bold py-2.5 rounded-lg active:scale-[0.98]">
                     <MessageCircle size={16} /> WhatsApp
                 </button>
-                {grupo === 'recusado' && (
-                    <button type="button" onClick={copiarLink} disabled={!s.link_pagamento}
-                        title={s.link_pagamento ? 'Copiar link de pagamento' : 'A Celcoin ainda não mandou o link deste assinante'}
-                        className="flex-1 flex items-center justify-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm font-medium py-2.5 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed">
-                        <Copy size={15} /> {copiado ? 'Copiado!' : 'Copiar link'}
-                    </button>
-                )}
                 {grupo === 'conferir' && (
                     <button type="button" onClick={() => setVincular(v => !v)}
                         className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-medium py-2.5 rounded-lg ${vincular ? 'bg-sky-800 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-200'}`}>
@@ -609,7 +598,6 @@ function ItemAcao({ grupo, item, dados, onMudou, contatar, contatado }) {
                     </button>
                 )}
             </div>
-            {grupo === 'recusado' && !s.link_pagamento && <div className="text-[11px] text-gray-500 mt-1.5">Sem link da Celcoin ainda: a mensagem vai sem link.</div>}
             {vincular && <VincularPagamento s={s} dados={dados} onMudou={onMudou} />}
         </div>
     )

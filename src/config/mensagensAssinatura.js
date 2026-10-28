@@ -3,13 +3,9 @@
 //   [nome]  primeiro nome do assinante
 //   [plano] nome do plano
 //   [data]  data do vencimento (DD/MM)
-//   [link]  link de pagamento da Celcoin (só em "recusado")
 
 export const MENSAGENS_WHATSAPP = {
-    recusado: 'Fala, [nome]! Tudo certo? A mensalidade do seu plano não passou no cartão. Pode ter sido limite ou cartão vencido, acontece. Regulariza por aqui pra continuar cortando com a gente: [link]. Qualquer coisa me chama!',
-
-    // Usada quando ainda não chegou o link de pagamento da Celcoin desse assinante
-    recusado_sem_link: 'Fala, [nome]! Tudo certo? A mensalidade do seu plano não passou no cartão. Pode ter sido limite ou cartão vencido, acontece. Me responde aqui que eu te mando o link pra regularizar e continuar cortando com a gente. Qualquer coisa me chama!',
+    recusado: 'Fala, [nome]! Tudo certo? A mensalidade do seu plano não passou no cartão. Pode ter sido limite ou cartão vencido, acontece. Me responde aqui que eu te mando o link pra regularizar e continuar cortando com a gente. Qualquer coisa me chama!',
 
     vencido: 'Fala, [nome]! Seu plano [plano] venceu dia [data]. Quando passar aqui é só renovar no balcão, que a gente já te atende. Tamo junto!',
 
