@@ -206,3 +206,18 @@ test('ciclo reinicia na data da última venda (ciclo_desde), sem mudar o início
     const [s] = situacaoAssinantes({ assinantes: [{ telefone: 'Y', nome: 'Y', valor: 80, origem: 'balcao', status_assinatura: 'ativa', inicio_contrato: '2025-01-05', ciclo_desde: '2026-10-20', vencimento: '2026-11-20' }], lancamentos: [], pagamentos: [], mes: '2026-10', hoje: new Date(2026, 9, 22) })
     assert.equal(s.ciclo.inicio.getDate(), 20)
 })
+test('pagamento dias antes do vencimento vale para o ciclo que começa (baixa manual de 23/10, ciclo dia 24)', () => {
+    const a = { telefone: '5521900000001', nome: 'Pedro', plano: 'Corte de Cria', valor: 80, origem: 'celcoin', status_assinatura: 'ativa', inicio_contrato: '2026-08-24' }
+    const pagamentos = [{ telefone: a.telefone, tipo: 'baixa_manual', receita: false, valor: 80, data: '2026-10-23' }]
+    const [s] = situacaoAssinantes({ assinantes: [a], lancamentos: [], pagamentos, mes: '2026-10', hoje: new Date('2026-10-28T15:00:00-03:00') })
+    assert.equal(s.ciclo.inicio.getDate(), 24)
+    assert.equal(s.pagou, true)
+    // O mesmo pagamento não conta para o ciclo anterior (24/09 a 23/10)
+    const [ant] = situacaoAssinantes({ assinantes: [a], lancamentos: [], pagamentos, mes: '2026-10', hoje: new Date('2026-10-20T15:00:00-03:00') })
+    assert.equal(ant.ciclo.inicio.getDate(), 24)
+    assert.equal(ant.ciclo.inicio.getMonth(), 8)
+    assert.notEqual(ant.pagou, true)
+    // Cartão aprovado alguns dias depois do início ainda é do ciclo atual
+    const [tarde] = situacaoAssinantes({ assinantes: [a], lancamentos: [], pagamentos: [{ telefone: a.telefone, receita: true, valor: 80, data: '2026-10-27' }], mes: '2026-10', hoje: new Date('2026-10-28T15:00:00-03:00') })
+    assert.equal(tarde.pagou, true)
+})

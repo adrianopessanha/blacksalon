@@ -125,6 +125,11 @@ export function cicloDe(diaCobranca, mes, hoje = new Date()) {
     return { inicio, fim }
 }
 
+// Pagamentos de [início − 15 dias, próximo início − 15 dias): cada data cai em um ciclo só
+const MEIO_CICLO_MS = 15 * 24 * 60 * 60 * 1000
+export const janelaPagamento = (inicio, fim) => (d) =>
+    !!d && d.getTime() >= inicio.getTime() - MEIO_CICLO_MS && d.getTime() < fim.getTime() + 1 - MEIO_CICLO_MS
+
 export const diaDoInicio = (a) => { const d = parseInt(String(a.ciclo_desde || a.inicio_contrato || a.vencimento || '').slice(8, 10), 10); return Number.isFinite(d) ? d : 1 }
 
 // Como um lançamento de assinante se liga a um assinante. Ordem: vínculo manual > telefone > código > nome.
@@ -152,10 +157,12 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
             .filter(x => x.tipo)
         const comissao = r2(visitasDet.reduce((s, x) => s + n(x.l.comissao_barbeiro), 0))
 
-        // Pagamento do ciclo
+        // Pagamento do ciclo: vale para o ciclo cujo início está mais perto da data do pagamento
+        // (pagou dias antes do vencimento = paga o ciclo que vai começar; cartão aprovado dias depois = o ciclo atual)
         const forma = formaCobranca(a)
-        const pagOnline = pagamentos.find(p => p.telefone === a.telefone && (p.receita || p.tipo === 'baixa_manual') && dentro(new Date(String(p.data) + 'T12:00:00')))
-        const pagBalcao = lancamentos.find(l => ehRenovacaoBalcao(l) && dentro(toDate(l.data)) && tipoLigacao(a, l))
+        const pagoNoCiclo = janelaPagamento(inicio, fim)
+        const pagOnline = pagamentos.find(p => p.telefone === a.telefone && (p.receita || p.tipo === 'baixa_manual') && pagoNoCiclo(new Date(String(p.data) + 'T12:00:00')))
+        const pagBalcao = lancamentos.find(l => ehRenovacaoBalcao(l) && pagoNoCiclo(toDate(l.data)) && tipoLigacao(a, l))
         const pagamentoLigadoPor = pagBalcao ? tipoLigacao(a, pagBalcao) : null
         let pagou = null, liquido = null
         if (forma === 'pix_manual') { pagou = a.status_assinatura === 'ativa'; liquido = pagou ? r2(n(a.valor)) : null }

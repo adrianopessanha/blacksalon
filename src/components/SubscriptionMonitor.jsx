@@ -4,15 +4,16 @@ import { db, collection, query, where, getDocs, doc, setDoc, updateDoc } from '.
 import { getDoc } from 'firebase/firestore'
 import { getApp } from 'firebase/app'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { RefreshCw, Pencil, Check, X, TrendingUp, Users, Tag, Search, ArrowUp, ArrowDown, Minus } from 'lucide-react'
+import { RefreshCw, Pencil, Check, X, TrendingUp, Users, Tag, Search, ArrowUp, ArrowDown, Minus, AlertTriangle, MessageCircle, Copy, Link2, ChevronDown } from 'lucide-react'
 import { TAXAS_ONLINE } from '../config/taxas'
-import { formatTelefone } from '../utils/phone'
+import { formatTelefone, semAcento } from '../utils/phone'
 import { lancamentoComTelefone } from '../utils/privado'
 import { carregarTelefones } from '../hooks/useClientes'
 import {
     resultadoMes, situacaoAssinantes, porPlano, pontoTendencia, tendencia, naoLigados,
-    CELCOIN_AUTO_DESDE, TAXA_MAQUININHA,
+    ehRenovacaoBalcao, tipoLigacao, CELCOIN_AUTO_DESDE, TAXA_MAQUININHA,
 } from '../utils/assinaturas'
+import { precisaDeAcao, mensagemWhatsApp, linkWhatsApp, contatoValido, ddmm, diaSP } from '../utils/acaoAssinantes'
 
 const fmt = (v) => (v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }))
 const pct = (v) => (v == null ? '—' : `${v.toFixed(1).replace('.', ',')}%`)
@@ -80,6 +81,8 @@ export function SubscriptionMonitor() {
     const [mes, setMes] = useState(/^\d{4}-\d{2}$/.test(params.get('mes') || '') ? params.get('mes') : mesAtual())
     const [grupo, setGrupo] = useState(GRUPOS.some(g => g.id === params.get('grupo')) ? params.get('grupo') : 'todos')
     const [busca, setBusca] = useState('')
+    // Lista completa fica recolhida no fim (abre direto quando o link já pede um grupo)
+    const [listaAberta, setListaAberta] = useState(!!params.get('grupo'))
 
     const carregar = () => {
         setLoading(true)
@@ -95,7 +98,7 @@ export function SubscriptionMonitor() {
         const ativosHoje = dados.assinantes.filter(a => a.status_assinatura === 'ativa').length
         const serie = meses.map(m => pontoTendencia(resultadoDoMes(dados, m), dados.resumos[m], novosParcial(m), m === mesAtual() ? ativosHoje : null))
         const situacao = situacaoAssinantes({ assinantes: dados.assinantes, lancamentos: dados.lancamentos, pagamentos: dados.pagamentos, mes })
-        return { res, serie, situacao, planos: porPlano(situacao) }
+        return { res, serie, situacao, planos: porPlano(situacao), acao: precisaDeAcao(situacao) }
     }, [dados, mes])
 
     const salvarLapis = async (valor) => {
@@ -113,7 +116,7 @@ export function SubscriptionMonitor() {
     }, [calc, grupo, busca])
 
     return (
-        <div className="space-y-5 max-w-5xl mx-auto">
+        <div className="space-y-5 max-w-5xl mx-auto pb-6">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <h1 className="text-xl font-bold text-gray-100">Assinaturas</h1>
                 <div className="flex items-center gap-2">
@@ -128,13 +131,23 @@ export function SubscriptionMonitor() {
             {!calc && !erro && <div className="text-gray-500 text-sm">Carregando...</div>}
             {calc && (
                 <>
+                    <PrecisaDeAcao grupos={calc.acao} dados={dados} onMudou={carregar} />
                     <ResultadoMes res={calc.res} mes={mes} lapis={dados.lapis[mes]} onSalvarLapis={salvarLapis} />
                     <Tendencia serie={calc.serie} />
                     <Recalcular mes={mes} onFeito={carregar} />
                     <PorPlano planos={calc.planos} />
-                    <section className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
-                        <h2 className="font-semibold text-gray-200 mb-3 flex items-center gap-2"><Users size={18} className="text-cyan-400" /> Por assinante (ciclo atual de cada um)</h2>
-                        <QuadroAlertas situacao={calc.situacao} />
+                    <section className="bg-gray-900 border border-gray-800 rounded-2xl">
+                        <button type="button" onClick={() => setListaAberta(v => !v)} aria-expanded={listaAberta}
+                            className="w-full flex items-center justify-between gap-2 p-4 text-left">
+                            <span className="font-semibold text-gray-200 flex items-center gap-2"><Users size={18} className="text-cyan-400" /> Todos os assinantes ({calc.situacao.length})</span>
+                            <ChevronDown size={20} className={`text-gray-400 transition-transform ${listaAberta ? 'rotate-180' : ''}`} />
+                        </button>
+                        {listaAberta && <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+                        <div className="relative mb-3">
+                            <Search size={16} className="absolute left-3 top-3 text-gray-500" />
+                            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por nome"
+                                className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2.5 pl-9 pr-3 text-base text-gray-200 outline-none focus:border-cyan-600" />
+                        </div>
                         <div className="flex flex-wrap gap-1.5 mb-3">
                             {GRUPOS.filter(g => g.id !== 'alertas' || calc.situacao.some(s => s.grupos.includes('alertas'))).map(g => {
                                 const qtd = g.id === 'todos' ? calc.situacao.length : calc.situacao.filter(s => s.grupos.includes(g.id)).length
@@ -146,15 +159,11 @@ export function SubscriptionMonitor() {
                                 )
                             })}
                         </div>
-                        <div className="relative mb-2">
-                            <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
-                            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar nome ou telefone"
-                                className="w-full bg-gray-950 border border-gray-800 rounded-lg py-2 pl-8 pr-3 text-sm text-gray-200 outline-none focus:border-cyan-600" />
-                        </div>
-                        <div className="divide-y divide-gray-800 max-h-[32rem] overflow-y-auto">
+                        <div className="divide-y divide-gray-800 max-h-[36rem] overflow-y-auto">
                             {lista.map(s => <LinhaAssinante key={s.telefone} s={s} assinantes={dados.assinantes} lancamentos={dados.lancamentos} cidDe={dados.cidDe} onMudou={carregar} />)}
-                            {lista.length === 0 && <div className="py-4 text-sm text-gray-500">Ninguém neste grupo.</div>}
+                            {lista.length === 0 && <div className="py-4 text-sm text-gray-500">Ninguém encontrado.</div>}
                         </div>
+                        </div>}
                     </section>
                 </>
             )}
@@ -387,7 +396,13 @@ function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
     const destaque = s.grupos.includes('alertas') ? 'border-l-2 border-l-orange-500 bg-orange-950/10' : s.grupos.includes('recusado') ? 'border-l-2 border-l-yellow-500 bg-yellow-950/10' : ''
     const dm = (d) => d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
     const soltos = aberto ? naoLigados(lancamentos, assinantes, s.ciclo.inicio, s.ciclo.fim) : []
-    const pagadores = assinantes.filter(a => a.telefone !== s.telefone && !a.pagador).sort((a, b) => String(a.nome).localeCompare(String(b.nome)))
+    // Status do contrato vem antes do pagamento: cancelado/recusado não pode aparecer como "pagamento sem dado"
+    const [corStatus, textoStatus] =
+        s.statusAtual === 'cancelada' ? ['text-gray-400', `cancelado${s.data_cancelamento ? ` em ${ddmm(s.data_cancelamento)}` : ''}`]
+            : s.status_assinatura === 'pagamento_recusado' && s.pagou !== true ? ['text-yellow-400', `cartão recusado${s.data_recusa ? ` em ${ddmm(s.data_recusa)}` : ''}`]
+                : s.statusAtual === 'vencido' && s.pagou !== true ? ['text-red-400', `vencido em ${ddmm(s.vencimento)}`]
+                    : s.pagou === true ? ['text-emerald-400', s.pagamentoLigadoPor === 'nome' ? 'pagou (a conferir)' : 'pagou']
+                        : s.pagou === false ? ['text-red-400', 'não pagou'] : ['text-gray-500', 'pagamento sem dado']
 
     const salvar = async (fn) => {
         setSalvando(true)
@@ -410,9 +425,7 @@ function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
                         {s.forma === 'pix_manual' && <span className="text-sky-400">Pix manual</span>}
                         <span>ciclo {dm(s.ciclo.inicio)}–{dm(s.ciclo.fim)}</span>
                         <span>{s.visitas} visita{s.visitas === 1 ? '' : 's'}{s.visitasDependentes ? ` + ${s.visitasDependentes} de dependente` : ''} · comissão {fmt(s.comissaoTotal ?? s.comissao)}</span>
-                        <span className={s.pagou === true ? 'text-emerald-400' : s.pagou === false ? 'text-red-400' : 'text-gray-500'}>
-                            {s.statusAtual === 'vencido' && s.pagou !== true ? `vencido em ${String(s.vencimento).split('-').reverse().join('/')}` : s.pagou === true ? (s.pagamentoLigadoPor === 'nome' ? 'pagou (a conferir)' : 'pagou') : s.pagou === false ? 'não pagou' : 'pagamento sem dado'}
-                        </span>
+                        <span className={corStatus}>{textoStatus}</span>
                         {s.aConferir > 0 && <span className="text-orange-400">{s.aConferir} a conferir</span>}
                         {s.grupos.map(g => <span key={g} className="text-yellow-400">{ROTULO_GRUPO[g]}</span>)}
                     </div>
@@ -450,29 +463,210 @@ function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
                             ))}
                         </div>
                     )}
-                    <label className="flex items-center gap-2 text-gray-400">
-                        Pagador (casal/família):
-                        <select value={s.pagador || ''} disabled={salvando} onChange={e => definirPagador(e.target.value)}
-                            className="bg-gray-950 border border-gray-700 rounded px-2 py-1 text-gray-200 max-w-[14rem]">
-                            <option value="">— paga a própria assinatura —</option>
-                            {pagadores.map(a => <option key={a.telefone} value={a.telefone}>{a.nome}</option>)}
-                        </select>
-                    </label>
+                    <PagadorBusca s={s} assinantes={assinantes} salvando={salvando} onDefinir={definirPagador} />
                 </div>
             )}
         </div>
     )
 }
-function QuadroAlertas({ situacao }) {
-    const casos = situacao.flatMap(s => (s.alertas || []).map(al => ({ s, al })))
-    if (!casos.length) return null
+
+// Pagador (casal/família) por busca, no lugar da lista com todos os nomes
+function PagadorBusca({ s, assinantes, salvando, onDefinir }) {
+    const [busca, setBusca] = useState('')
+    const atual = s.pagador ? assinantes.find(a => a.telefone === s.pagador) : null
+    const termo = semAcento(busca.trim())
+    const opcoes = termo.length >= 2
+        ? assinantes.filter(a => a.telefone !== s.telefone && !a.pagador && semAcento(a.nome).includes(termo)).slice(0, 6)
+        : []
     return (
-        <div className="mb-3 rounded-xl border border-orange-800/50 bg-orange-950/20 p-3 text-xs space-y-1.5">
-            {casos.map(({ s, al }, k) => (
-                <div key={k} className="text-orange-200">
-                    <b>{al.texto}</b> — {s.nome}: {al.visitas.map(v => `${v.dia.slice(8, 10)}/${v.dia.slice(5, 7)} ${(v.barbeiro || '?').split(' ')[0]}`).join(', ')}
+        <div className="space-y-1.5">
+            <div className="text-gray-500">Pagador (casal/família)</div>
+            {atual ? (
+                <div className="flex items-center gap-2 text-gray-300">
+                    <span>Quem paga: <b className="text-gray-100">{atual.nome}</b></span>
+                    <button type="button" disabled={salvando} onClick={() => onDefinir(null)} className="text-red-400 underline">remover</button>
+                </div>
+            ) : <div className="text-gray-600">Paga a própria assinatura.</div>}
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder={atual ? 'Trocar pagador: buscar pelo nome' : 'Buscar pagador pelo nome'}
+                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-base text-gray-200 outline-none focus:border-cyan-600" />
+            {opcoes.map(a => (
+                <button key={a.telefone} type="button" disabled={salvando} onClick={() => { onDefinir(a.telefone); setBusca('') }}
+                    className="w-full text-left bg-gray-950 border border-gray-800 hover:border-cyan-600 rounded-lg px-3 py-2 text-sm text-gray-200">
+                    {a.nome} <span className="text-gray-500">· {a.plano || 'sem plano'}</span>
+                </button>
+            ))}
+            {termo.length >= 2 && !opcoes.length && <div className="text-gray-600">Ninguém com esse nome.</div>}
+        </div>
+    )
+}
+
+// ==========================================
+// Precisa de ação (topo da aba)
+// ==========================================
+const COR_GRUPO = {
+    recusado: 'border-yellow-700/60 text-yellow-300',
+    vencido: 'border-red-800/60 text-red-300',
+    conferir: 'border-sky-800/60 text-sky-300',
+    pagou_nao_veio: 'border-purple-800/60 text-purple-300',
+    fora_regra: 'border-orange-800/60 text-orange-300',
+}
+const MOSTRAR_POR_GRUPO = 6
+
+function PrecisaDeAcao({ grupos, dados, onMudou }) {
+    // Contatos gravados nesta visita (sem recarregar a aba inteira): "telefone|grupo" -> AAAA-MM-DD
+    const [contatos, setContatos] = useState({})
+    if (!grupos.length) {
+        return (
+            <section className="bg-gray-900 border border-emerald-800/50 rounded-2xl p-4 text-sm text-emerald-300 flex items-center gap-2">
+                <Check size={18} /> Nada precisa de ação agora.
+            </section>
+        )
+    }
+    const pessoas = new Set(grupos.flatMap(g => g.itens.map(i => i.s.telefone))).size
+
+    const contatar = (grupo, s) => {
+        const texto = mensagemWhatsApp(grupo, s)
+        if (!texto) return
+        window.open(linkWhatsApp(s.telefone, texto), '_blank', 'noopener')
+        const hoje = diaSP(new Date())
+        setContatos(c => ({ ...c, [`${s.telefone}|${grupo}`]: hoje }))
+        updateDoc(doc(db, 'assinantes', s.telefone), { [`contato.${grupo}`]: hoje })
+            .catch(e => alert('O WhatsApp abriu, mas não gravou o "contatado": ' + e.message))
+    }
+    const contatoDe = (grupo, item) => contatoValido(contatos[`${item.s.telefone}|${grupo}`] || item.s.contato?.[grupo], item.desde)
+
+    return (
+        <section className="bg-gray-900 border border-orange-800/40 rounded-2xl p-3 sm:p-4 space-y-5">
+            <h2 className="font-semibold text-gray-100 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-orange-400" /> Precisa de ação
+                <span className="text-sm font-normal text-gray-400">({pessoas} {pessoas === 1 ? 'pessoa' : 'pessoas'})</span>
+            </h2>
+            {grupos.map(g => <GrupoAcao key={g.id} g={g} dados={dados} onMudou={onMudou} contatar={contatar} contatoDe={contatoDe} />)}
+        </section>
+    )
+}
+
+function GrupoAcao({ g, dados, onMudou, contatar, contatoDe }) {
+    const [todos, setTodos] = useState(false)
+    const itens = todos ? g.itens : g.itens.slice(0, MOSTRAR_POR_GRUPO)
+    return (
+        <div>
+            <h3 className={`text-sm font-bold mb-2 pb-1 border-b ${COR_GRUPO[g.id]}`}>{g.titulo} ({g.itens.length})</h3>
+            <div className="space-y-2">
+                {itens.map(item => g.id === 'fora_regra'
+                    ? <ItemForaRegra key={item.s.telefone} s={item.s} />
+                    : <ItemAcao key={item.s.telefone} grupo={g.id} item={item} dados={dados} onMudou={onMudou} contatar={contatar} contatado={contatoDe(g.id, item)} />)}
+            </div>
+            {g.itens.length > MOSTRAR_POR_GRUPO && (
+                <button type="button" onClick={() => setTodos(v => !v)} className="mt-2 text-sm text-gray-400 underline py-1">
+                    {todos ? 'Mostrar menos' : `Ver todos (${g.itens.length})`}
+                </button>
+            )}
+        </div>
+    )
+}
+
+function ItemAcao({ grupo, item, dados, onMudou, contatar, contatado }) {
+    const { s } = item
+    const [vincular, setVincular] = useState(false)
+    const [copiado, setCopiado] = useState(false)
+    const valor = s.valor ?? s.plano?.preco
+    const detalhe = {
+        recusado: `${item.dias == null ? 'recusado' : item.dias === 0 ? 'recusou hoje' : `recusou há ${item.dias} dia${item.dias === 1 ? '' : 's'}`}${valor ? ` · ${fmt(Number(valor))}` : ''}`,
+        vencido: `venceu em ${ddmm(s.vencimento)}`,
+        conferir: `ciclo desde ${ddmm(diaSP(s.ciclo.inicio))} · nenhum pagamento ligado`,
+        pagou_nao_veio: `ciclo ${ddmm(diaSP(s.ciclo.inicio))}–${ddmm(diaSP(s.ciclo.fim))} · nenhuma visita`,
+    }[grupo]
+    const copiarLink = () => navigator.clipboard.writeText(s.link_pagamento)
+        .then(() => { setCopiado(true); setTimeout(() => setCopiado(false), 2000) })
+        .catch(e => alert('Não copiou: ' + e.message))
+
+    return (
+        <div className="bg-gray-950 border border-gray-800 rounded-xl p-3">
+            <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                    <div className="text-base font-semibold text-gray-100 truncate">{s.nome}</div>
+                    <div className="text-xs text-gray-400">{s.plano?.label} · {detalhe}</div>
+                </div>
+                {contatado && <span className="shrink-0 text-[11px] font-bold text-emerald-300 bg-emerald-950/50 border border-emerald-800/60 rounded-full px-2 py-0.5">contatado em {ddmm(contatado)}</span>}
+            </div>
+            <div className="flex gap-2 mt-2.5">
+                <button type="button" onClick={() => contatar(grupo, s)}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-bold py-2.5 rounded-lg active:scale-[0.98]">
+                    <MessageCircle size={16} /> WhatsApp
+                </button>
+                {grupo === 'recusado' && (
+                    <button type="button" onClick={copiarLink} disabled={!s.link_pagamento}
+                        title={s.link_pagamento ? 'Copiar link de pagamento' : 'A Celcoin ainda não mandou o link deste assinante'}
+                        className="flex-1 flex items-center justify-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm font-medium py-2.5 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed">
+                        <Copy size={15} /> {copiado ? 'Copiado!' : 'Copiar link'}
+                    </button>
+                )}
+                {grupo === 'conferir' && (
+                    <button type="button" onClick={() => setVincular(v => !v)}
+                        className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-medium py-2.5 rounded-lg ${vincular ? 'bg-sky-800 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-200'}`}>
+                        <Link2 size={15} /> Vincular pagamento
+                    </button>
+                )}
+            </div>
+            {grupo === 'recusado' && !s.link_pagamento && <div className="text-[11px] text-gray-500 mt-1.5">Sem link da Celcoin ainda: a mensagem vai sem link.</div>}
+            {vincular && <VincularPagamento s={s} dados={dados} onMudou={onMudou} />}
+        </div>
+    )
+}
+
+function ItemForaRegra({ s }) {
+    return (
+        <div className="bg-gray-950 border border-gray-800 rounded-xl p-3">
+            <div className="text-base font-semibold text-gray-100 truncate">{s.nome} <span className="text-xs font-normal text-gray-500">· {s.plano?.label}</span></div>
+            {s.alertas.map((al, k) => (
+                <div key={k} className="text-xs text-orange-200 mt-1">
+                    <b>{al.texto}</b>{al.visitas?.length ? `: ${al.visitas.map(v => `${ddmm(v.dia)} ${(v.barbeiro || '?').split(' ')[0]}`).join(', ')}` : ''}
                 </div>
             ))}
+        </div>
+    )
+}
+
+// Renovações pagas no balcão que não se ligaram a nenhum assinante (nome diferente, sem código).
+// Sem busca: as do período do ciclo (15 dias antes do início em diante). Com busca: últimos 60 dias.
+const DIA_MS = 24 * 60 * 60 * 1000
+function VincularPagamento({ s, dados, onMudou }) {
+    const [busca, setBusca] = useState('')
+    const [salvando, setSalvando] = useState(false)
+    const soltos = useMemo(() => dados.lancamentos
+        .filter(l => ehRenovacaoBalcao(l) && l.data?.toDate && !dados.assinantes.some(a => tipoLigacao(a, l)))
+        .sort((a, b) => b.data.toDate() - a.data.toDate()), [dados])
+    const termo = semAcento(busca.trim())
+    const desde = new Date(s.ciclo.inicio.getTime() - 15 * DIA_MS)
+    const ha60 = new Date(Date.now() - 60 * DIA_MS)
+    const lista = soltos.filter(l => termo.length >= 2
+        ? l.data.toDate() >= ha60 && semAcento(l.cliente_nome).includes(termo)
+        : l.data.toDate() >= desde).slice(0, 10)
+
+    const vincular = async (l) => {
+        const cid = dados.cidDe.get(s.telefone)
+        if (!cid) return alert('Este assinante ainda não tem código de cliente.')
+        if (!confirm(`Ligar o pagamento de ${fmt(Number(l.valor_bruto))} (${l.cliente_nome || 'sem nome'}, ${l.data.toDate().toLocaleDateString('pt-BR')}) a ${s.nome}?`)) return
+        setSalvando(true)
+        try { await updateDoc(doc(db, 'lancamentos', l.id), { assinante_id: cid }); onMudou() } catch (e) { alert('Erro: ' + e.message) } finally { setSalvando(false) }
+    }
+
+    return (
+        <div className="mt-3 space-y-2 border-t border-gray-800 pt-3">
+            <div className="text-xs text-gray-400">Pagamentos no balcão sem dono {termo.length >= 2 ? '(últimos 60 dias)' : `desde ${desde.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`}</div>
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar pelo nome lançado"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-base text-gray-200 outline-none focus:border-sky-600" />
+            {lista.map(l => (
+                <div key={l.id} className="flex items-center gap-2 text-sm text-gray-300 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+                    <div className="flex-1 min-w-0">
+                        <div className="truncate">{l.cliente_nome || 'sem nome'}</div>
+                        <div className="text-[11px] text-gray-500">{l.data.toDate().toLocaleDateString('pt-BR')} · {fmt(Number(l.valor_bruto))} {l.forma_pagamento} · {(l.barbeiro_nome || '').split(' ')[0]}</div>
+                    </div>
+                    <button type="button" disabled={salvando} onClick={() => vincular(l)} className="shrink-0 bg-sky-700 hover:bg-sky-600 text-white text-sm font-bold px-3 py-2 rounded-lg disabled:opacity-50">vincular</button>
+                </div>
+            ))}
+            {!lista.length && <div className="text-xs text-gray-500">Nenhum pagamento sem dono {termo.length >= 2 ? 'com esse nome' : 'nesse período'}. Se pagou na Celcoin, confira se o evento chegou.</div>}
         </div>
     )
 }
