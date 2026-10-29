@@ -6,6 +6,7 @@ export const BARBERS = [
     { id: 'leandro', name: 'Leandro Martins', store: 'loja-01', email: 'leanmartins82@gmail.com', inactive: true },
     { id: 'rodrigo', name: 'Rodrigo Azevedo', store: 'loja-01', email: 'rhcabelereiro2@gmail.com', inactive: true },
     { id: 'veloso', name: 'Veloso Martins', store: 'loja-01', email: 'martinsveloso075@gmail.com' },
+    { id: 'junior', name: 'Júnior', store: 'loja-01', email: 'bradockjunior94@gmail.com' },
     { id: 'luizfelipe', name: 'Luiz Felipe', store: 'loja-01', email: 'luizfelipecastilho121@gmail.com', inactive: true },
     { id: 'estevao', name: 'Estevao Silva', store: 'loja-01', email: 'ninosanchezs25@gmail.com', inactive: true },
     { id: 'lucas', name: 'Lucas Santos', store: 'loja-01', email: '2t.ducorte30@gmail.com', inactive: true }
