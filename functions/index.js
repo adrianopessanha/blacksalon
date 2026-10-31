@@ -4,7 +4,7 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { defineSecret } = require("firebase-functions/params");
 const { timingSafeEqual } = require("crypto");
 const { parseAgendamento } = require("./agendamento");
-const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato } = require("./assinatura");
+const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato, decidirEvento, semStatus } = require("./assinatura");
 const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { visaoPublica } = require("./publico");
 const { onTaskDispatched } = require("firebase-functions/v2/tasks");
@@ -330,6 +330,8 @@ exports.registrarAgendamento = onRequest(
 // POST /registrarPagamentoAssinatura  (header x-make-secret)
 // ==========================================
 const tsMs = (v) => (v && typeof v.toMillis === "function" ? v.toMillis() : null);
+// Cobrança gravada antes do histórico: o próprio status vira a 1ª entrada
+const historicoDe = (c) => c.historico || [{ status: c.status_celcoin || null, tipo: c.tipo || null, data_status: c.data_pagamento || null, recebido_em: c.recebido_em || null }];
 
 exports.registrarPagamentoAssinatura = onRequest(
     {
@@ -356,15 +358,28 @@ exports.registrarPagamentoAssinatura = onRequest(
 
             const resultado = await db.runTransaction(async (tx) => {
                 const existente = await tx.get(pagRef);
-                if (existente.exists) return { duplicado: true, situacao: existente.data().situacao };
-
+                const anterior = existente.exists ? existente.data() : null;
                 const cliente = await tx.get(clienteRef);
-                const assinanteAtual = await tx.get(db.collection("assinantes").doc(p.telefone));
+                const assinanteRef = db.collection("assinantes").doc(p.telefone);
+                const assinanteAtual = await tx.get(assinanteRef);
+                const ass = assinanteAtual.exists ? assinanteAtual.data() : null;
                 const planosCelcoin = await tx.get(db.collection("configuracoes").doc("planos_celcoin"));
-                let situacao = "registrado";
-                let lancamentoId = null;
 
-                if (p.classe === "baixa_manual") {
+                // Data/hora do status na Celcoin (Transaction.statusDate); sem ela, a hora de chegada
+                const dataMs = p.dataPagamento ? p.dataPagamento.getTime() : Date.now();
+                const historico = anterior ? historicoDe(anterior) : [];
+                const decisao = decidirEvento(
+                    p,
+                    dataMs,
+                    anterior ? { dataMs: tsMs(anterior.data_pagamento), historico: historico.map((h) => ({ status: h.status, dataMs: tsMs(h.data_status) })) } : null,
+                    ass ? { statusMs: tsMs(ass.status_evento_em), aprovadoMs: tsMs(ass.ultimo_aprovado_em), aprovadoTx: ass.ultimo_aprovado_tx || null } : null
+                );
+                if (decisao.duplicado) return { duplicado: true, situacao: anterior.situacao };
+
+                let situacao = "registrado";
+                let lancamentoId = anterior?.lancamento_id || null;
+
+                if (p.classe === "baixa_manual" && decisao.atualizaCobranca && !lancamentoId) {
                     const pendentes = await tx.get(db.collection("lancamentos")
                         .where("cliente_id", "==", cid)
                         .where("tipo", "==", "renovacao_celcoin")
@@ -387,11 +402,16 @@ exports.registrarPagamentoAssinatura = onRequest(
                     } else {
                         situacao = "baixa_sem_lancamento";
                     }
+                } else if (p.classe === "baixa_manual" && lancamentoId) {
+                    situacao = "vinculado";
                 } else if (p.classe === "cartao_aprovado") {
                     situacao = "receita_celcoin";
                 }
 
-                tx.set(pagRef, {
+                const dataStatus = Timestamp.fromMillis(dataMs);
+                const entrada = { status: p.status, tipo: p.classe, data_status: dataStatus, recebido_em: Timestamp.now() };
+                // Status mais recente da cobrança (pela data da Celcoin); um mais velho só entra no histórico
+                tx.set(pagRef, decisao.atualizaCobranca ? {
                     transacao_id: p.transacaoId,
                     telefone: p.telefone,
                     cliente_id: cid,
@@ -408,28 +428,32 @@ exports.registrarPagamentoAssinatura = onRequest(
                     codigo_cliente: p.codigoCliente,
                     email: p.email,
                     documento: p.documento,
-                    data_pagamento: p.dataPagamento ? Timestamp.fromDate(p.dataPagamento) : FieldValue.serverTimestamp(),
+                    data_pagamento: dataStatus,
                     data: p.dataStr,
-                    recebido_em: FieldValue.serverTimestamp(),
+                    ...(anterior ? { atualizado_em: FieldValue.serverTimestamp() } : { recebido_em: FieldValue.serverTimestamp() }),
                     // O que o Make mandou, para conferência (coleção só admin)
                     recebido: Object.fromEntries(Object.entries(req.body || {}).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : v])),
-                });
+                    historico: [...historico, entrada],
+                } : { historico: [...historico, entrada], atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
 
-                const upd = atualizacaoCliente(p);
+                const upd = decisao.mudaAssinante ? atualizacaoCliente(p) : { celcoin: true };
                 if (upd.ultimo_pagamento_assinatura instanceof Date) {
                     upd.ultimo_pagamento_assinatura = Timestamp.fromDate(upd.ultimo_pagamento_assinatura);
                 }
                 if (!cliente.exists && p.nome) upd.nome = p.nome;
                 tx.set(clienteRef, { ...upd, atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
                 tx.set(privadoRef(cid), dadosPrivados(p.telefone), { merge: true });
-                tx.set(db.collection("assinantes").doc(p.telefone), {
-                    ...atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}, assinanteAtual.exists ? assinanteAtual.data().status_assinatura : null),
+                const updAss = atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}, ass ? ass.status_assinatura : null, ass ? ass.plano : null);
+                tx.set(assinanteRef, {
+                    ...(decisao.mudaAssinante ? updAss : semStatus(updAss)),
+                    ...(decisao.mudaAssinante && updAss.status_assinatura ? { status_evento_em: dataStatus } : {}),
+                    ...(decisao.novoAprovado ? { ultimo_aprovado_em: dataStatus, ultimo_aprovado_tx: p.transacaoId } : {}),
                     // Assinante novo da Celcoin: o 1º evento marca o início (define o dia do ciclo)
-                    ...(assinanteAtual.exists && assinanteAtual.data().inicio_contrato ? {} : { inicio_contrato: p.dataStr || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }) }),
+                    ...(ass && ass.inicio_contrato ? {} : { inicio_contrato: p.dataStr || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }) }),
                     ultima_atualizacao: FieldValue.serverTimestamp(),
                 }, { merge: true });
 
-                return { duplicado: false, situacao, lancamento_id: lancamentoId };
+                return { duplicado: false, situacao, lancamento_id: lancamentoId, vale_para_status: decisao.mudaAssinante };
             });
 
             return res.status(200).json({ success: true, id: pagId, tipo: p.classe, ...resultado });

@@ -2,7 +2,7 @@
   "name": "blacksalon-functions",
   "description": "Cloud Functions para o Black Salon - Webhook de Vale Presente",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "scripts": {

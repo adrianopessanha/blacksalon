@@ -131,10 +131,15 @@ const STATUS_ASSINANTE = {
 };
 const DATA_DO_EVENTO = { cancelada: "data_cancelamento", recusado: "data_recusa", nova: "data_adesao" };
 
+// O webhook não traz o nome do plano: deduz pelo valor da cobrança do cartão (R$ 80 = Cria; quase ninguém faz Barba)
+const PLANO_POR_VALOR = { 140: "Cabelo e Barba", 100: "Corte Ilimitado", 80: "Corte de Cria" };
+const planoPeloValor = (valor) => (valor != null ? PLANO_POR_VALOR[Math.round(valor * 100) / 100] || null : null);
+
 // Campos de assinantes/{telefone}; só inclui nome/plano/valor quando vierem.
 // planoMapa: configuracoes/planos_celcoin ({ planMyId: "Nome do plano" })
 // statusAtual: status gravado hoje (para não rebaixar quem já está ativo)
-function atualizacaoAssinante(p, planoMapa = {}, statusAtual = null) {
+// planoAtual: plano já gravado; nunca é sobrescrito
+function atualizacaoAssinante(p, planoMapa = {}, statusAtual = null, planoAtual = null) {
     let status = STATUS_ASSINANTE[p.classe];
     // Contrato "active" ou "waitingPayment": só marca aguardando se ainda não paga (novo, cancelado ou inativo)
     if (p.classe === "contrato_ativo" || p.classe === "nova") {
@@ -154,10 +159,49 @@ function atualizacaoAssinante(p, planoMapa = {}, statusAtual = null) {
     if (DATA_DO_EVENTO[p.classe]) upd[DATA_DO_EVENTO[p.classe]] = dataEvento;
     if (p.nome) upd.nome = p.nome;
     const planoDoCodigo = p.planoId ? planoMapa[p.planoId] : null;
-    if (planoDoCodigo || p.plano) upd.plano = planoDoCodigo || p.plano;
+    // Pelo valor só com cobrança do cartão (valor da assinatura); baixa manual pode ser parcial ou avulsa
+    const planoNovo = planoDoCodigo || p.plano || (["cartao_aprovado", "recusado"].includes(p.classe) ? planoPeloValor(p.valor) : null);
+    if (planoNovo && !String(planoAtual || "").trim()) upd.plano = planoNovo;
     if (p.planoId) upd.plano_id = p.planoId;
     if (p.valor != null) upd.valor = p.valor;
     return upd;
+}
+
+const APROVADOS = ["cartao_aprovado", "baixa_manual"];
+// Campos que só mudam quando o evento vale para o status do assinante
+const CAMPOS_DE_STATUS = ["status_assinatura", "status_original", "data_ultimo_evento", "data_recusa", "data_cancelamento", "data_adesao", "data_cobranca_cancelada"];
+
+// A mesma cobrança chega várias vezes e fora de ordem (ex.: recusada 12:09, capturada 12:12).
+// Tudo é comparado pela data/hora do status na Celcoin, nunca pela hora de chegada.
+// cobranca: { historico: [{ status, dataMs }], dataMs } da cobrança já gravada, ou null
+// assinante: { statusMs, aprovadoMs, aprovadoTx } gravados no assinante, ou null
+function decidirEvento(p, dataMs, cobranca, assinante) {
+    const hist = cobranca?.historico || [];
+    if (hist.some((h) => h.status === p.status && h.dataMs === dataMs)) return { duplicado: true };
+    const a = assinante || {};
+    // Evento mais velho que o status atual não muda nada
+    let mudaAssinante = a.statusMs == null || dataMs >= a.statusMs;
+    if (!APROVADOS.includes(p.classe) && a.aprovadoMs != null) {
+        // Recusa (ou qualquer outro status) só vale se for mais recente que o último pagamento aprovado
+        if (dataMs <= a.aprovadoMs) mudaAssinante = false;
+        // Cobrança antiga (ex.: recusada virando cancelada) não derruba um pagamento aprovado mais novo
+        const inicioCobranca = Math.min(dataMs, ...hist.map((h) => h.dataMs).filter(Number.isFinite));
+        if (p.transacaoId && p.transacaoId !== a.aprovadoTx && inicioCobranca < a.aprovadoMs) mudaAssinante = false;
+    }
+    return {
+        duplicado: false,
+        // A cobrança mostra o status mais recente; o mais velho só entra no histórico
+        atualizaCobranca: !cobranca || cobranca.dataMs == null || dataMs >= cobranca.dataMs,
+        mudaAssinante,
+        novoAprovado: APROVADOS.includes(p.classe) && (a.aprovadoMs == null || dataMs > a.aprovadoMs),
+    };
+}
+
+// Tira do update os campos de status quando o evento não vale para o assinante
+function semStatus(upd) {
+    const r = { ...upd };
+    for (const k of CAMPOS_DE_STATUS) delete r[k];
+    return r;
 }
 // candidatos: [{ id, valor, dataMs }]. Só os dos últimos 7 dias; prefere valor igual, depois o mais recente.
 function escolherCandidato(candidatos, valor, agoraMs) {
@@ -168,4 +212,4 @@ function escolherCandidato(candidatos, valor, agoraMs) {
     return pool.sort((a, b) => b.dataMs - a.dataMs)[0];
 }
 
-module.exports = { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato, classificar, parseValor, parseData };
+module.exports = { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato, classificar, parseValor, parseData, decidirEvento, semStatus, planoPeloValor, APROVADOS };

@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato, classificar, parseValor, parseData } = require("./assinatura");
+const { parsePagamento, atualizacaoCliente, atualizacaoAssinante, escolherCandidato, classificar, parseValor, parseData, decidirEvento, semStatus, planoPeloValor } = require("./assinatura");
 
 const base = {
     transacao_id: "98765",
@@ -146,4 +146,86 @@ test("waitingPayment/active não rebaixam assinante que já está ativo; novo fi
     assert.equal(atualizacaoAssinante(a, {}, "pagamento_recusado").status_assinatura, undefined);
     assert.equal(atualizacaoAssinante(a, {}, "cancelada").status_assinatura, "aguardando_pagamento");
     assert.equal(parsePagamento({ telefone: "5521986207196", status: "overdue" }).classe, "evento");
+});
+
+// Simula o handler: grava cobrança e assinante só pelo que decidirEvento manda
+function simular(eventos) {
+    const cobrancas = {};
+    let ass = { status_assinatura: null, statusMs: null, aprovadoMs: null, aprovadoTx: null, plano: null };
+    for (const corpo of eventos) {
+        const p = parsePagamento({ telefone: "5521987735062", valor: "80", ...corpo });
+        const dataMs = p.dataPagamento.getTime();
+        const c = cobrancas[p.sufixo] || null;
+        const d = decidirEvento(p, dataMs, c, ass);
+        if (d.duplicado) continue;
+        cobrancas[p.sufixo] = {
+            historico: [...(c?.historico || []), { status: p.status, dataMs }],
+            dataMs: d.atualizaCobranca ? dataMs : c.dataMs,
+            status: d.atualizaCobranca ? p.status : c.status,
+        };
+        const upd = atualizacaoAssinante(p, {}, ass.status_assinatura, ass.plano);
+        Object.assign(ass, d.mudaAssinante ? upd : semStatus(upd));
+        if (d.mudaAssinante && upd.status_assinatura) ass.statusMs = dataMs;
+        if (d.novoAprovado) Object.assign(ass, { aprovadoMs: dataMs, aprovadoTx: p.transacaoId });
+    }
+    return { ass, cobrancas };
+}
+const recusa52 = { transacao_id: "52", status: "Negada na Operadora", data: "2026-10-31 12:09:45" };
+const aprova52 = { transacao_id: "52", status: "Capturada na Operadora", data: "2026-10-31 12:12:30" };
+
+test("Marco Aurélio: recusa e aprovação na MESMA cobrança → ativo (antes a aprovação era descartada como repetida)", () => {
+    const { ass, cobrancas } = simular([recusa52, aprova52, aprova52]);
+    assert.equal(ass.status_assinatura, "ativa");
+    assert.equal(cobrancas["52"].status, "Capturada na Operadora");
+    assert.equal(cobrancas["52"].historico.length, 2); // reenvio idêntico não duplica
+});
+
+test("aprovação chegando ANTES da recusa (fora de ordem) → continua ativo, cobrança fica capturada", () => {
+    const { ass, cobrancas } = simular([aprova52, recusa52]);
+    assert.equal(ass.status_assinatura, "ativa");
+    assert.equal(cobrancas["52"].status, "Capturada na Operadora");
+    assert.deepEqual(cobrancas["52"].historico.map((h) => h.status), ["Capturada na Operadora", "Negada na Operadora"]);
+});
+
+test("recusa só vale se for mais recente que o último aprovado", () => {
+    const antes = simular([aprova52, { transacao_id: "60", status: "Negada na Operadora", data: "2026-10-31 12:00:00" }]);
+    assert.equal(antes.ass.status_assinatura, "ativa");
+    const depois = simular([aprova52, { transacao_id: "61", status: "Negada na Operadora", data: "2026-11-30 06:40:00" }]);
+    assert.equal(depois.ass.status_assinatura, "pagamento_recusado");
+});
+
+test("cobrança antiga recusada virando cancelada não derruba aprovado mais novo; contrato cancelado depois vale", () => {
+    const velha = { transacao_id: "40", status: "Negada na Operadora", data: "2026-10-01 06:40:00" };
+    const r = simular([velha, aprova52,
+        { transacao_id: "40", status: "Cancelado ao cancelar contrato", data: "2026-10-31 13:00:00" },
+        { transacao_id: "40", status: "Estornada", data: "2026-10-31 13:05:00" }]);
+    assert.equal(r.ass.status_assinatura, "ativa");
+    // Cancelamento do contrato (evento sem cobrança) depois do aprovado continua valendo
+    const c = simular([aprova52, { status: "canceled", evento: "cancelada", data: "2026-11-05 10:00:00" }]);
+    assert.equal(c.ass.status_assinatura, "cancelada");
+    // Estorno da PRÓPRIA cobrança aprovada, depois dela, vale
+    const e = simular([aprova52, { transacao_id: "52", status: "Estornada", data: "2026-11-01 10:00:00" }]);
+    assert.equal(e.ass.status_assinatura, "inativa");
+});
+
+test("evento atrasado (status mais velho que o atual) só entra no histórico", () => {
+    const r = simular([
+        { status: "canceled", evento: "cancelada", data: "2026-11-05 10:00:00" },
+        { transacao_id: "70", status: "Capturada na Operadora", data: "2026-11-01 06:40:00" },
+    ]);
+    assert.equal(r.ass.status_assinatura, "cancelada");
+    assert.equal(r.ass.aprovadoTx, "70"); // o pagamento continua registrado
+});
+
+test("plano pelo valor: só para quem está sem plano e só com cobrança do cartão", () => {
+    assert.equal(planoPeloValor(140), "Cabelo e Barba");
+    assert.equal(planoPeloValor(100), "Corte Ilimitado");
+    assert.equal(planoPeloValor(80), "Corte de Cria");
+    assert.equal(planoPeloValor(160), null);
+    const cartao = parsePagamento({ ...recusa52, telefone: "5521987735062", valor: "80" });
+    assert.equal(atualizacaoAssinante(cartao, {}, null, null).plano, "Corte de Cria");
+    assert.equal(atualizacaoAssinante(cartao, {}, null, "Barba Ilimitada").plano, undefined);
+    assert.equal(atualizacaoAssinante(cartao, {}, null, "2 × Corte de Cria").plano, undefined);
+    const manual = parsePagamento({ telefone: "5521987735062", transacao_id: "9", status: "Paga fora do sistema", valor: "40" });
+    assert.equal(atualizacaoAssinante(manual, {}, null, null).plano, undefined);
 });
