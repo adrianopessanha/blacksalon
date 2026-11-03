@@ -14,6 +14,7 @@ import {
     ehRenovacaoBalcao, tipoLigacao, CELCOIN_AUTO_DESDE, TAXA_MAQUININHA,
 } from '../utils/assinaturas'
 import { precisaDeAcao, mensagemWhatsApp, linkWhatsApp, contatoValido, ddmm, diaSP } from '../utils/acaoAssinantes'
+import { EditarAssinante, AdicionarDependente } from './EditarAssinante'
 
 const fmt = (v) => (v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }))
 const pct = (v) => (v == null ? '—' : `${v.toFixed(1).replace('.', ',')}%`)
@@ -111,7 +112,7 @@ export function SubscriptionMonitor() {
         const termo = busca.trim().toLowerCase()
         return calc.situacao
             .filter(s => grupo === 'todos' || s.grupos.includes(grupo))
-            .filter(s => !termo || String(s.nome || '').toLowerCase().includes(termo) || String(s.telefone).includes(termo.replace(/\D/g, '') || '§'))
+            .filter(s => !termo || String(s.nome || '').toLowerCase().includes(termo) || [s.telefone, ...(s.telefones_anteriores || [])].some(t => String(t).includes(termo.replace(/\D/g, '') || '§')))
             .sort((a, b) => (a.resultado ?? 0) - (b.resultado ?? 0))
     }, [calc, grupo, busca])
 
@@ -392,7 +393,11 @@ const ROTULO_LIGACAO = { manual: 'vinculado à mão', telefone: 'telefone', codi
 
 function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
     const [aberto, setAberto] = useState(false)
+    const [editando, setEditando] = useState(false)
     const [salvando, setSalvando] = useState(false)
+    const cadastro = assinantes.find(a => a.telefone === s.telefone) || s
+    // Dependente sem telefone próprio: ID {pagador}-depN; contato é o telefone do pagador
+    const semTelefone = /-dep\d+$/.test(s.telefone)
     const destaque = s.grupos.includes('alertas') ? 'border-l-2 border-l-orange-500 bg-orange-950/10' : s.grupos.includes('recusado') ? 'border-l-2 border-l-yellow-500 bg-yellow-950/10' : ''
     const dm = (d) => d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
     const soltos = aberto ? naoLigados(lancamentos, assinantes, s.ciclo.inicio, s.ciclo.fim) : []
@@ -413,15 +418,16 @@ function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
         if (!cid) throw new Error('assinante sem código de cliente')
         await updateDoc(doc(db, 'lancamentos', lancId), { assinante_id: cid })
     })
-    const definirPagador = (tel) => salvar(() => updateDoc(doc(db, 'assinantes', s.telefone), { pagador: tel || null }))
 
     return (
         <div className={`py-2.5 px-2 ${destaque}`}>
-            <button type="button" onClick={() => setAberto(v => !v)} className="w-full flex items-center gap-3 text-left">
+            <div className="flex items-start gap-2">
+            <button type="button" onClick={() => setAberto(v => !v)} className="flex-1 min-w-0 flex items-center gap-3 text-left">
                 <div className="flex-1 min-w-0">
                     <div className="text-sm text-gray-100 truncate">{s.nome}{s.dependenteDe && <span className="text-[11px] text-cyan-400"> · dependente de {s.dependenteDe}</span>}</div>
                     <div className="text-[11px] text-gray-500 flex flex-wrap gap-x-2">
-                        <span>{formatTelefone(s.telefone)}</span><span>{s.plano.label}</span>
+                        <span>{semTelefone ? `sem telefone · contato ${formatTelefone(s.telefone_contato || s.pagador)}` : formatTelefone(s.telefone)}</span><span>{s.plano.label}</span>
+                        {s.observacao && <span className="text-gray-400 italic">“{s.observacao}”</span>}
                         {s.forma === 'pix_manual' && <span className="text-sky-400">Pix manual</span>}
                         <span>ciclo {dm(s.ciclo.inicio)}–{dm(s.ciclo.fim)}</span>
                         <span>{s.visitas} visita{s.visitas === 1 ? '' : 's'}{s.visitasDependentes ? ` + ${s.visitasDependentes} de dependente` : ''} · comissão {fmt(s.comissaoTotal ?? s.comissao)}</span>
@@ -437,6 +443,12 @@ function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
                 </div>
                 <div className={`text-sm font-bold whitespace-nowrap ${s.resultado == null ? 'text-gray-500' : s.resultado >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{s.resultado == null ? '—' : fmt(s.resultado)}</div>
             </button>
+                <button type="button" onClick={() => setEditando(v => !v)} title="Editar assinante" aria-label={`Editar ${s.nome}`}
+                    className={`shrink-0 p-2 rounded-lg ${editando ? 'bg-cyan-800 text-white' : 'text-gray-400 hover:text-cyan-300 hover:bg-gray-800'}`}>
+                    <Pencil size={15} />
+                </button>
+            </div>
+            {editando && <EditarAssinante key={JSON.stringify(cadastro.historico_edicoes?.length || 0)} id={s.telefone} cadastro={cadastro} assinantes={assinantes} onMudou={onMudou} onFechar={() => setEditando(false)} />}
 
             {aberto && (
                 <div className="mt-2 ml-1 space-y-3 text-xs">
@@ -463,39 +475,10 @@ function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
                             ))}
                         </div>
                     )}
-                    <PagadorBusca s={s} assinantes={assinantes} salvando={salvando} onDefinir={definirPagador} />
+                    {s.dependentes?.length > 0 && <div className="text-gray-400">Dependentes: {s.dependentes.join(', ')}</div>}
+                    {!s.pagador && !semTelefone && <AdicionarDependente pagador={s.telefone} onMudou={onMudou} />}
                 </div>
             )}
-        </div>
-    )
-}
-
-// Pagador (casal/família) por busca, no lugar da lista com todos os nomes
-function PagadorBusca({ s, assinantes, salvando, onDefinir }) {
-    const [busca, setBusca] = useState('')
-    const atual = s.pagador ? assinantes.find(a => a.telefone === s.pagador) : null
-    const termo = semAcento(busca.trim())
-    const opcoes = termo.length >= 2
-        ? assinantes.filter(a => a.telefone !== s.telefone && !a.pagador && semAcento(a.nome).includes(termo)).slice(0, 6)
-        : []
-    return (
-        <div className="space-y-1.5">
-            <div className="text-gray-500">Pagador (casal/família)</div>
-            {atual ? (
-                <div className="flex items-center gap-2 text-gray-300">
-                    <span>Quem paga: <b className="text-gray-100">{atual.nome}</b></span>
-                    <button type="button" disabled={salvando} onClick={() => onDefinir(null)} className="text-red-400 underline">remover</button>
-                </div>
-            ) : <div className="text-gray-600">Paga a própria assinatura.</div>}
-            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder={atual ? 'Trocar pagador: buscar pelo nome' : 'Buscar pagador pelo nome'}
-                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-base text-gray-200 outline-none focus:border-cyan-600" />
-            {opcoes.map(a => (
-                <button key={a.telefone} type="button" disabled={salvando} onClick={() => { onDefinir(a.telefone); setBusca('') }}
-                    className="w-full text-left bg-gray-950 border border-gray-800 hover:border-cyan-600 rounded-lg px-3 py-2 text-sm text-gray-200">
-                    {a.nome} <span className="text-gray-500">· {a.plano || 'sem plano'}</span>
-                </button>
-            ))}
-            {termo.length >= 2 && !opcoes.length && <div className="text-gray-600">Ninguém com esse nome.</div>}
         </div>
     )
 }

@@ -24,6 +24,8 @@ export const GRUPOS_ACAO = [
 export function precisaDeAcao(situacao, hoje = new Date()) {
     const g = Object.fromEntries(GRUPOS_ACAO.map(x => [x.id, []]))
     for (const s of situacao) {
+        // Dependente: a cobrança e o contato são com o pagador; só entra se atendeu fora da regra
+        if (s.dependenteDe) { if (s.alertas?.length) g.fora_regra.push({ s }); continue }
         const inicioCiclo = diaSP(s.ciclo.inicio)
         if (s.grupos.includes('recusado')) g.recusado.push({ s, desde: s.data_recusa || inicioCiclo, dias: diasDesde(s.data_recusa, hoje) })
         if (s.statusAtual === 'vencido') g.vencido.push({ s, desde: s.vencimento })

@@ -16,9 +16,13 @@ export function SeloAssinante({ assinante }) {
         : assinante.codigo === 'recusado' ? 'bg-yellow-900/40 text-yellow-300 border-yellow-700/60'
             : 'bg-red-900/40 text-red-300 border-red-800/60'
     return (
-        <span className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded-full border ${cor}`}>
-            {assinante.plano || 'Assinante'} · {assinante.statusTexto}
-        </span>
+        <>
+            <span className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded-full border ${cor}`}>
+                {assinante.plano || 'Assinante'} · {assinante.statusTexto}
+            </span>
+            {/* Pagador e dependente aparecem separados: o barbeiro toca no certo */}
+            {assinante.dependente_de?.nome && <span className="ml-1.5 text-[11px] text-cyan-300">dependente de {assinante.dependente_de.nome}</span>}
+        </>
     )
 }
 

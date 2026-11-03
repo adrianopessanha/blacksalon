@@ -45,7 +45,8 @@ export const ehBuscaPorTelefone = (termo) => String(termo || '').replace(/\D/g, 
 export function buscarAssinantes(lista, termo, cidDoTelefone = null) {
     const t = String(termo || '').trim()
     if (t.length < 2) return []
-    if (ehBuscaPorTelefone(t)) return cidDoTelefone ? lista.filter(p => p.cliente_id === cidDoTelefone) : []
+    // Telefone do pagador traz ele e os dependentes
+    if (ehBuscaPorTelefone(t)) return cidDoTelefone ? lista.filter(p => p.cliente_id === cidDoTelefone || p.dependente_de?.cliente_id === cidDoTelefone) : []
     const nome = semAcento(t)
     return lista.filter(p => semAcento(p.nome).includes(nome))
 }

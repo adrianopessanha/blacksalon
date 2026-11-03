@@ -221,3 +221,25 @@ test('pagamento dias antes do vencimento vale para o ciclo que começa (baixa ma
     const [tarde] = situacaoAssinantes({ assinantes: [a], lancamentos: [], pagamentos: [{ telefone: a.telefone, receita: true, valor: 80, data: '2026-10-27' }], mes: '2026-10', hoje: new Date('2026-10-28T15:00:00-03:00') })
     assert.equal(tarde.pagou, true)
 })
+
+test('dependente sem telefone: ciclo e status do pagador; visita dele conta só para ele e soma no pagador', () => {
+    const hoje = new Date('2026-11-20T15:00:00-03:00')
+    const mae = { telefone: '5521964598462', nome: 'Andresa de Jesus', plano: '2 × Corte de Cria', valor: 160, origem: 'balcao', status_assinatura: 'ativa', inicio_contrato: '2026-10-15', ciclo_desde: '2026-11-03', vencimento: '2026-12-03' }
+    const filho = { telefone: '5521964598462-dep1', nome: 'Filho', plano: 'Corte de Cria', pagador: '5521964598462', telefone_contato: '5521964598462', forma_cobranca: 'balcao', origem: 'balcao', status_assinatura: null, inicio_contrato: '2026-11-03', valor: null }
+    // As telas do admin trazem cliente_telefone = ID do assinante (de clientes_privado)
+    const lancamentos = [
+        atend('2026-11-05T15:00:00-03:00', 10, { cliente_telefone: '5521964598462-dep1', cliente_nome: 'Filho' }),
+        atend('2026-11-06T15:00:00-03:00', 10, { cliente_telefone: '5521964598462', cliente_nome: 'Andresa de Jesus' }),
+        renov('2026-11-03T12:00:00-03:00', 160, 'Pix', { tipo: 'venda_assinatura', cliente_telefone: '5521964598462' }),
+    ]
+    const sit = situacaoAssinantes({ assinantes: [mae, filho], lancamentos, pagamentos: [], mes: '2026-11', hoje })
+    const m = sit.find(s => s.telefone === mae.telefone), f = sit.find(s => s.telefone === filho.telefone)
+    assert.equal(f.ciclo.inicio.getDate(), 3) // ciclo da mãe (dia 3)
+    assert.equal(f.statusAtual, 'ativa')
+    assert.equal(f.dependenteDe, 'Andresa de Jesus')
+    assert.equal(f.visitas, 1)
+    assert.equal(m.visitas, 1)
+    assert.equal(m.visitasTotais, 2)
+    assert.equal(m.pagou, true)
+    assert.equal(f.pagou, true)
+})

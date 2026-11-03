@@ -145,9 +145,12 @@ export function tipoLigacao(a, l) {
 }
 
 export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, hoje = new Date() }) {
+    const cadastroPorTel = new Map(assinantes.map(a => [a.telefone, a]))
     const base = assinantes.map(a => {
         const plano = planoDe(a)
-        const { inicio, fim } = cicloDe(diaDoInicio(a), mes, hoje)
+        // Dependente segue o ciclo do pagador (o filho sem telefone não tem cobrança própria)
+        const pagadorCad = a.pagador ? cadastroPorTel.get(a.pagador) : null
+        const { inicio, fim } = cicloDe(diaDoInicio(pagadorCad || a), mes, hoje)
         // Ainda não era assinante nesse ciclo
         if (a.inicio_contrato && a.inicio_contrato > diaSP(fim)) return null
         const dentro = (d) => d && d >= inicio && d <= fim
@@ -199,6 +202,8 @@ export function situacaoAssinantes({ assinantes, lancamentos, pagamentos, mes, h
     return base.map(s => {
         if (s.dependenteDe) {
             const pag = porTel.get(s.pagador)
+            // Status do dependente = status do pagador
+            s = { ...s, statusAtual: pag.statusAtual, status_assinatura: pag.status_assinatura, vencimento: pag.vencimento ?? s.vencimento }
             const grupos = []
             if (s.status_assinatura === 'cancelada' && s.visitas > 0) grupos.push('cancelado_atendendo')
             if (s.alertas.length) grupos.push('alertas')

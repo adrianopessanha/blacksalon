@@ -28,6 +28,22 @@ test('busca por nome sem acento e por telefone completo (código do servidor)', 
     assert.deepEqual(buscarNaBase(base, 'x'), [])
 })
 
+test('telefone do pagador traz pagador e dependentes separados, cada um com o próprio código', () => {
+    const b = montarBase({
+        clientes: [{ id: 'c_mae', nome: 'Andresa de Jesus' }],
+        assinantes: [
+            { cliente_id: 'c_mae', nome: 'Andresa de Jesus', plano: '2 × Corte de Cria', forma: 'balcao', status_assinatura: 'ativa', vencimento: '2026-12-03' },
+            { cliente_id: 'c_filho', nome: 'Filho da Andresa', plano: 'Corte de Cria', forma: 'balcao', status_assinatura: null,
+                dependente_de: { nome: 'Andresa de Jesus', cliente_id: 'c_mae', forma: 'balcao', status_assinatura: 'ativa', vencimento: '2026-12-03' } },
+        ],
+    }, hoje)
+    const r = buscarNaBase(b, '21964598462', 'c_mae')
+    assert.deepEqual(r.map(x => x.cliente_id).sort(), ['c_filho', 'c_mae'])
+    // Dependente segue o status do pagador
+    assert.equal(r.find(x => x.cliente_id === 'c_filho').assinante.ativo, true)
+    assert.deepEqual(buscarNaBase(b, 'filho').map(x => x.cliente_id), ['c_filho'])
+})
+
 test('reserva some quando o cliente já foi lançado hoje (qualquer pagamento) ou a reserva foi usada', () => {
     const ag = [
         { id: 'A', cliente_id: 'c_1', hora: '10:00', unidade: '01', barbeiro: 'Veloso' },

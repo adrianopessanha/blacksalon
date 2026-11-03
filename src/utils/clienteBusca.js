@@ -30,7 +30,8 @@ const ehTelefone = (termo) => String(termo || '').replace(/\D/g, '').length >= 8
 export function buscarNaBase(base, termo, cidDoTelefone = null, limite = 8) {
     const t = String(termo || '').trim()
     if (t.length < 2) return []
-    if (ehTelefone(t)) return cidDoTelefone ? base.filter(x => x.cliente_id === cidDoTelefone) : []
+    // Telefone do pagador traz ele e os dependentes (filho sem telefone próprio), cada um com o seu código
+    if (ehTelefone(t)) return cidDoTelefone ? base.filter(x => x.cliente_id === cidDoTelefone || x.assinante?.dependente_de?.cliente_id === cidDoTelefone) : []
     const q = semAcento(t)
     return base
         .filter(x => semAcento(x.nome).includes(q))

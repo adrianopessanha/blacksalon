@@ -13,8 +13,9 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { calcularResumo, mesAnterior } = require("./resumo");
 const { getFunctions } = require("firebase-admin/functions");
 const { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, idTarefa } = require("./pesquisa");
-const { cidDe, normalizarTelefone, TELEFONE_RE, CID_RE } = require("./clienteId");
+const { cidDe, cidDeAssinante, normalizarTelefone, TELEFONE_RE, CID_RE, DEP_RE, ID_ASSINANTE_RE } = require("./clienteId");
 const { decidirVendaBalcao } = require("./balcao");
+const { edicaoAssinante, entradasHistorico, proximoIdDependente, novoDependente, idPagamentoMovido } = require("./edicaoAssinante");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
 // Deve bater com o campo webhookSecret que o Make envia no corpo JSON
@@ -30,8 +31,22 @@ const db = getFirestore();
 // Tudo o que o barbeiro lê usa o código (cliente_id).
 // ==========================================
 const codigoDe = (tel55) => cidDe(tel55, CLIENTE_ID_SECRET.value());
+// Assinante: telefone ou dependente sem telefone ({pagador}-dep1)
+const codigoAssinante = (id) => cidDeAssinante(id, CLIENTE_ID_SECRET.value());
 const privadoRef = (cid) => db.collection("clientes_privado").doc(cid);
 const dadosPrivados = (telefone) => ({ telefone, atualizado_em: FieldValue.serverTimestamp() });
+
+// Telefone trocado na aba Assinaturas: o número antigo leva ao novo (busca, Booksy e Celcoin)
+async function telefoneAtual(tel55) {
+    let tel = tel55;
+    for (let i = 0; i < 3 && TELEFONE_RE.test(String(tel || "")); i++) {
+        const snap = await privadoRef(codigoDe(tel)).get();
+        const novo = snap.exists ? snap.data().movido_para : null;
+        if (!TELEFONE_RE.test(String(novo || "")) || novo === tel) break;
+        tel = novo;
+    }
+    return tel;
+}
 
 // Lançamento novo traz cliente_id; o app antigo (ainda em cache) traz cliente_telefone
 function codigoDoLancamento(lanc) {
@@ -42,7 +57,9 @@ function codigoDoLancamento(lanc) {
 async function telefoneDoCodigo(cid) {
     if (!CID_RE.test(String(cid || ""))) return null;
     const snap = await privadoRef(cid).get();
-    return snap.exists ? snap.data().telefone || null : null;
+    // Dependente sem telefone guarda o próprio ID no lugar do telefone: não serve para mensagem nem venda
+    const tel = snap.exists ? snap.data().telefone || null : null;
+    return TELEFONE_RE.test(String(tel || "")) ? tel : null;
 }
 
 // Hora de São Paulo nos avisos ao Make
@@ -276,6 +293,7 @@ exports.registrarAgendamento = onRequest(
         if (!ag.ok) return res.status(422).json({ error: "Dados insuficientes", motivos: ag.erros });
 
         try {
+            ag.telefone = await telefoneAtual(ag.telefone);
             const cid = codigoDe(ag.telefone);
             const agId = `${cid}_${ag.sufixo}`;
             const agRef = db.collection("agendamentos").doc(agId);
@@ -350,6 +368,8 @@ exports.registrarPagamentoAssinatura = onRequest(
         if (!p.ok) return res.status(422).json({ error: "Dados insuficientes", motivos: p.erros });
 
         try {
+            // Assinante que trocou de telefone: a Celcoin ainda pode mandar o número antigo
+            p.telefone = await telefoneAtual(p.telefone);
             const cid = codigoDe(p.telefone);
             // ID sem telefone: o lançamento guarda esse ID em pagamento_assinatura_id
             const pagId = `${cid}_${p.sufixo}`;
@@ -689,14 +709,15 @@ exports.sincronizarAssinantePublico = onDocumentWritten(
     { document: "assinantes/{telefone}", region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
     async (event) => {
         const tel = event.params.telefone;
-        if (!TELEFONE_RE.test(tel)) return console.error("assinantes: ID fora do formato 55+DDD+número");
-        const cid = codigoDe(tel);
+        if (!ID_ASSINANTE_RE.test(tel)) return console.error("assinantes: ID fora do formato 55+DDD+número (ou -depN)");
+        const cid = codigoAssinante(tel);
         const depois = event.data?.after;
         const pubRef = db.collection("assinantes_publico").doc(cid);
-        const dependentes = (await db.collection("assinantes").where("pagador", "==", tel).get())
-            .docs.filter((d) => TELEFONE_RE.test(d.id));
+        const dependentes = TELEFONE_RE.test(tel)
+            ? (await db.collection("assinantes").where("pagador", "==", tel).get()).docs.filter((d) => ID_ASSINANTE_RE.test(d.id))
+            : [];
         const gravarPublico = (id, dados, pagador = null) => {
-            const c = codigoDe(id);
+            const c = codigoAssinante(id);
             return db.collection("assinantes_publico").doc(c).set(visaoPublica({ ...dados, cliente_id: c }, pagador));
         };
 
@@ -705,7 +726,11 @@ exports.sincronizarAssinantePublico = onDocumentWritten(
             for (const d of dependentes) await gravarPublico(d.id, d.data());
             return;
         }
-        await privadoRef(cid).set(dadosPrivados(tel), { merge: true });
+        // Dependente sem telefone: o "telefone" do código é o próprio ID (as telas do admin ligam por ele);
+        // o telefone do pagador fica só como contato
+        await privadoRef(cid).set(DEP_RE.test(tel)
+            ? { ...dadosPrivados(tel), telefone_contato: depois.data().telefone_contato || null, dependente: true }
+            : dadosPrivados(tel), { merge: true });
         const a = { ...depois.data(), cliente_id: cid };
         let pagador = null;
         if (TELEFONE_RE.test(String(a.pagador || ""))) {
@@ -747,8 +772,10 @@ exports.resolverCliente = onCall(
     async (request) => {
         await exigirUsuario(request);
         const d = request.data || {};
-        const tel55 = normalizarTelefone(d.telefone);
-        if (!tel55) throw new HttpsError("invalid-argument", "Telefone inválido: informe DDD + número.");
+        const digitado = normalizarTelefone(d.telefone);
+        if (!digitado) throw new HttpsError("invalid-argument", "Telefone inválido: informe DDD + número.");
+        // Número antigo de assinante que trocou de telefone também encontra o cadastro
+        const tel55 = await telefoneAtual(digitado);
         const cid = codigoDe(tel55);
         const ref = db.collection("clientes").doc(cid);
         const snap = await ref.get();
@@ -860,5 +887,175 @@ exports.notificarVale = onCall(
         }
         await avisarMake(MAKE_VALE_URL, dados);
         return { ok: true };
+    }
+);
+
+// ==========================================
+// Aba Assinaturas (só admin): editar assinante, trocar telefone e dependente sem telefone
+// ==========================================
+const quemEditou = (request) => request.auth?.token?.email || request.auth?.uid || null;
+
+async function exigirAdmin(request) {
+    const u = await exigirUsuario(request);
+    if (!u.admin) throw new HttpsError("permission-denied", "Só admin.");
+    return u;
+}
+
+// Campos do cadastro, com histórico (quem, quando, campo, antes/depois). O telefone muda em trocarTelefoneAssinante.
+exports.editarAssinante = onCall(
+    { region: "southamerica-east1" },
+    async (request) => {
+        await exigirAdmin(request);
+        const id = String(request.data?.id || "");
+        if (!ID_ASSINANTE_RE.test(id)) throw new HttpsError("invalid-argument", "Assinante inválido.");
+        const ref = db.collection("assinantes").doc(id);
+        const snap = await ref.get();
+        if (!snap.exists) throw new HttpsError("not-found", "Assinante não encontrado.");
+        const { upd, mudancas, erros } = edicaoAssinante(snap.data(), request.data?.campos, id);
+        if (erros.length) throw new HttpsError("invalid-argument", erros.join(" "));
+        if (!mudancas.length) return { mudancas: [] };
+        if (upd.pagador) {
+            const p = await db.collection("assinantes").doc(upd.pagador).get();
+            if (!p.exists) throw new HttpsError("invalid-argument", "Pagador não encontrado.");
+            if (p.data().pagador) throw new HttpsError("invalid-argument", `${p.data().nome || "Esse pagador"} já é dependente de outra pessoa.`);
+            const deps = await db.collection("assinantes").where("pagador", "==", id).limit(1).get();
+            if (!deps.empty) throw new HttpsError("invalid-argument", "Quem tem dependentes não pode ser dependente de outra pessoa.");
+        }
+        const em = new Date().toISOString();
+        await ref.update({
+            ...upd,
+            // Status mudado à mão: evento da Celcoin mais antigo que isso não volta atrás
+            ...(upd.status_assinatura ? { status_evento_em: Timestamp.fromDate(new Date(em)) } : {}),
+            historico_edicoes: FieldValue.arrayUnion(...entradasHistorico(mudancas, quemEditou(request), em)),
+            ultima_atualizacao: FieldValue.serverTimestamp(),
+        });
+        return { mudancas };
+    }
+);
+
+// Troca de telefone: sem confirmar, só devolve o resumo do que vai ser movido.
+// Confirmado: o assinante vai para o ID novo e tudo que apontava para o número antigo acompanha.
+exports.trocarTelefoneAssinante = onCall(
+    { region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET], timeoutSeconds: 300 },
+    async (request) => {
+        await exigirAdmin(request);
+        const d = request.data || {};
+        const de = String(d.de || "");
+        const para = normalizarTelefone(d.para);
+        if (!TELEFONE_RE.test(de)) throw new HttpsError("invalid-argument", "Assinante inválido (dependente sem telefone não troca de telefone).");
+        if (!para) throw new HttpsError("invalid-argument", "Telefone novo inválido: informe DDD + número.");
+        if (para === de) throw new HttpsError("invalid-argument", "O telefone novo é igual ao atual.");
+
+        const antigoRef = db.collection("assinantes").doc(de);
+        const novoRef = db.collection("assinantes").doc(para);
+        const [antigo, novo] = await Promise.all([antigoRef.get(), novoRef.get()]);
+        if (!antigo.exists) throw new HttpsError("not-found", "Assinante não encontrado.");
+        if (novo.exists) throw new HttpsError("already-exists", `Já existe assinante com o telefone novo: ${novo.data().nome || para}.`);
+
+        const cidA = codigoDe(de), cidN = codigoDe(para);
+        const col = (c) => db.collection(c);
+        const [lancCli, lancAss, pags, ags, vales, deps, cliA, cliN, privA, privN] = await Promise.all([
+            col("lancamentos").where("cliente_id", "==", cidA).get(),
+            col("lancamentos").where("assinante_id", "==", cidA).get(),
+            col("pagamentos_assinatura").where("telefone", "==", de).get(),
+            col("agendamentos").where("cliente_id", "==", cidA).get(),
+            col("clientes_vale").where("cliente_id", "==", cidA).get(),
+            col("assinantes").where("pagador", "==", de).get(),
+            col("clientes").doc(cidA).get(),
+            col("clientes").doc(cidN).get(),
+            privadoRef(cidA).get(),
+            privadoRef(cidN).get(),
+        ]);
+        const lancs = new Map([...lancCli.docs, ...lancAss.docs].map((x) => [x.id, x]));
+        const resumo = {
+            de, para,
+            nome: antigo.data().nome || null,
+            lancamentos: lancs.size,
+            pagamentos: pags.size,
+            agendamentos: ags.size,
+            vales: vales.size,
+            dependentes: deps.docs.map((x) => x.data().nome || x.id),
+            cadastro_cliente: cliA.exists,
+            cliente_novo_existe: cliN.exists,
+        };
+        if (!d.confirmar) return { resumo };
+
+        // Escritas em lotes de até 400; o assinante e os dependentes vão no último
+        const ops = [];
+        for (const l of lancs.values()) {
+            const upd = {};
+            if (l.data().cliente_id === cidA) upd.cliente_id = cidN;
+            if (l.data().assinante_id === cidA) upd.assinante_id = cidN;
+            ops.push((b) => b.update(l.ref, upd));
+        }
+        for (const p of pags.docs) {
+            const novoId = idPagamentoMovido(p.id, cidA, cidN);
+            if (!novoId) { ops.push((b) => b.update(p.ref, { telefone: para, cliente_id: cidN })); continue; }
+            const dados = { ...p.data(), telefone: para, cliente_id: cidN };
+            ops.push((b) => b.set(col("pagamentos_assinatura").doc(novoId), dados));
+            ops.push((b) => b.delete(p.ref));
+            const ligados = await col("lancamentos").where("pagamento_assinatura_id", "==", p.id).get();
+            for (const l of ligados.docs) ops.push((b) => b.update(l.ref, { pagamento_assinatura_id: novoId }));
+        }
+        for (const a of ags.docs) ops.push((b) => b.update(a.ref, { cliente_id: cidN }));
+        for (const v of vales.docs) ops.push((b) => b.update(v.ref, { cliente_id: cidN }));
+        if (cliA.exists) {
+            // O que já existe no código novo vale mais; o antigo só completa (inclui pesquisa e Booksy)
+            ops.push((b) => b.set(col("clientes").doc(cidN), { ...cliA.data(), ...(cliN.exists ? cliN.data() : {}), atualizado_em: FieldValue.serverTimestamp() }));
+            ops.push((b) => b.delete(cliA.ref));
+        }
+        const pa = privA.exists ? privA.data() : {};
+        const pn = privN.exists ? privN.data() : {};
+        ops.push((b) => b.set(privadoRef(cidN), { ...dadosPrivados(para), email: pn.email || pa.email || null, cpf: pn.cpf || pa.cpf || null }, { merge: true }));
+        ops.push((b) => b.set(privadoRef(cidA), { movido_para: para, movido_em: FieldValue.serverTimestamp() }, { merge: true }));
+
+        const em = new Date().toISOString();
+        const a = antigo.data();
+        const finais = [
+            ...deps.docs.map((x) => (b) => b.update(x.ref, { pagador: para, ...(DEP_RE.test(x.id) ? { telefone_contato: para } : {}) })),
+            (b) => b.set(novoRef, {
+                ...a,
+                ...(a.telefone !== undefined ? { telefone: para } : {}),
+                telefones_anteriores: [...(a.telefones_anteriores || []), de],
+                historico_edicoes: [...(a.historico_edicoes || []), ...entradasHistorico([{ campo: "telefone", antes: de, depois: para }], quemEditou(request), em)],
+                ultima_atualizacao: FieldValue.serverTimestamp(),
+            }),
+            (b) => b.delete(antigoRef),
+        ];
+        for (let i = 0; i < ops.length; i += 400) {
+            const b = db.batch();
+            ops.slice(i, i + 400).forEach((f) => f(b));
+            await b.commit();
+        }
+        const b = db.batch();
+        finais.forEach((f) => f(b));
+        await b.commit();
+        return { resumo, movido: true };
+    }
+);
+
+// Dependente sem telefone próprio (ex.: filho): ID {telefone do pagador}-dep{n}; status segue o pagador
+exports.adicionarDependente = onCall(
+    { region: "southamerica-east1", secrets: [CLIENTE_ID_SECRET] },
+    async (request) => {
+        await exigirAdmin(request);
+        const d = request.data || {};
+        const pagador = String(d.pagador || "");
+        const nome = String(d.nome || "").trim();
+        if (!TELEFONE_RE.test(pagador)) throw new HttpsError("invalid-argument", "Pagador inválido.");
+        if (!nome) throw new HttpsError("invalid-argument", "Informe o nome do dependente.");
+        const pag = await db.collection("assinantes").doc(pagador).get();
+        if (!pag.exists) throw new HttpsError("not-found", "Pagador não encontrado.");
+        if (pag.data().pagador) throw new HttpsError("invalid-argument", "Esse assinante já é dependente de outra pessoa.");
+        const existentes = await db.collection("assinantes").where("pagador", "==", pagador).get();
+        const id = proximoIdDependente(pagador, existentes.docs.map((x) => x.id));
+        const em = new Date().toISOString();
+        await db.collection("assinantes").doc(id).create({
+            ...novoDependente({ pagador, pagadorDados: pag.data(), nome, plano: String(d.plano || "").trim(), hoje: diaSP(new Date()) }),
+            historico_edicoes: entradasHistorico([{ campo: "criado", antes: null, depois: `dependente de ${pag.data().nome || pagador}` }], quemEditou(request), em),
+            criado_em: FieldValue.serverTimestamp(),
+            ultima_atualizacao: FieldValue.serverTimestamp(),
+        });
+        return { id, cliente_id: codigoAssinante(id) };
     }
 );

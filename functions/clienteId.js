@@ -4,6 +4,9 @@ const { createHmac } = require("crypto");
 
 const TELEFONE_RE = /^55\d{10,11}$/;
 const CID_RE = /^c_[0-9a-f]{20}$/;
+// Dependente sem telefone próprio: {telefone do pagador}-dep{n}
+const DEP_RE = /^55\d{10,11}-dep\d+$/;
+const ID_ASSINANTE_RE = /^55\d{10,11}(-dep\d+)?$/;
 
 function normalizarTelefone(raw) {
     let d = String(raw || "").replace(/\D/g, "");
@@ -19,4 +22,11 @@ function cidDe(tel55, segredo) {
     return "c_" + createHmac("sha256", segredo).update(String(tel55)).digest("hex").slice(0, 20);
 }
 
-module.exports = { cidDe, normalizarTelefone, TELEFONE_RE, CID_RE };
+// Código do assinante: telefone ou ID de dependente (o código do dependente é outro, não o do pagador)
+function cidDeAssinante(id, segredo) {
+    if (!ID_ASSINANTE_RE.test(String(id || ""))) throw new Error("ID de assinante inválido para gerar código");
+    if (!segredo) throw new Error("segredo ausente");
+    return "c_" + createHmac("sha256", segredo).update(String(id)).digest("hex").slice(0, 20);
+}
+
+module.exports = { cidDe, cidDeAssinante, normalizarTelefone, TELEFONE_RE, CID_RE, DEP_RE, ID_ASSINANTE_RE };
