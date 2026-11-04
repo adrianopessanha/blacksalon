@@ -36,12 +36,18 @@ service cloud.firestore {
       allow read, write: if isAuthorized();
     }
 
+    // Financeiro (DRE, contas a pagar, capital): só admin lê e grava
     match /financeiro/{docId} {
-      allow read, write: if isAuthorized();
+      allow read, write: if isAdmin();
     }
 
     match /movimentacoes/{docId} {
-      allow read, write: if isAuthorized();
+      allow read, write: if isAdmin();
+    }
+
+    // Contas recorrentes do Financeiro (a conta de cada mês é gerada pela função)
+    match /contas_recorrentes/{docId} {
+      allow read, write: if isAdmin();
     }
 
     // Clientes do vale: sem telefone, e-mail ou CPF (ficam em clientes_privado; o app grava cliente_id)

@@ -16,6 +16,7 @@ const { motivoParaNaoEnviar, pesquisaHoje, reservadaPorOutro, montarPayload, idT
 const { cidDe, cidDeAssinante, normalizarTelefone, TELEFONE_RE, CID_RE, DEP_RE, ID_ASSINANTE_RE } = require("./clienteId");
 const { decidirVendaBalcao } = require("./balcao");
 const { edicaoAssinante, entradasHistorico, proximoIdDependente, novoDependente, idPagamentoMovido } = require("./edicaoAssinante");
+const { contaDoMes, mesesParaGerar, addMeses } = require("./recorrentes");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
 // Deve bater com o campo webhookSecret que o Make envia no corpo JSON
@@ -1031,6 +1032,47 @@ exports.trocarTelefoneAssinante = onCall(
         finais.forEach((f) => f(b));
         await b.commit();
         return { resumo, movido: true };
+    }
+);
+
+// ==========================================
+// Financeiro: contas recorrentes viram "a pagar" em financeiro/rec_{id}_{AAAA-MM}
+// ==========================================
+async function gerarContasRecorrentes(hojeISO) {
+    const recs = await db.collection("contas_recorrentes").get();
+    let criadas = 0;
+    for (const r of recs.docs) {
+        const rec = { id: r.id, ...r.data() };
+        for (const mes of mesesParaGerar(hojeISO)) {
+            const ref = db.collection("financeiro").doc(`rec_${rec.id}_${mes}`);
+            if ((await ref.get()).exists) continue;
+            // Conta variável: previsão = o que foi pago no mês anterior
+            const ant = rec.valor_tipo === "estimado" ? await db.collection("financeiro").doc(`rec_${rec.id}_${addMeses(mes, -1)}`).get() : null;
+            const valorAnterior = ant?.exists && ant.data().status === "pago" ? Number(ant.data().amount) || null : null;
+            const conta = contaDoMes(rec, mes, valorAnterior);
+            if (!conta) continue;
+            try {
+                await ref.create({ ...conta.dados, created_at: FieldValue.serverTimestamp() });
+                criadas++;
+            } catch (err) {
+                if (err.code !== 6) throw err; // 6 = ALREADY_EXISTS: gerada ao mesmo tempo pela outra chamada
+            }
+        }
+    }
+    return criadas;
+}
+
+exports.gerarContasRecorrentesDiario = onSchedule(
+    { schedule: "10 4 * * *", timeZone: "America/Sao_Paulo", region: "southamerica-east1" },
+    async () => console.log("contas recorrentes geradas:", await gerarContasRecorrentes(diaSP(new Date())))
+);
+
+// Chamado pelo app logo depois de cadastrar ou editar uma recorrência
+exports.gerarContasRecorrentesAgora = onCall(
+    { region: "southamerica-east1" },
+    async (request) => {
+        await exigirAdmin(request);
+        return { criadas: await gerarContasRecorrentes(diaSP(new Date())) };
     }
 );
 

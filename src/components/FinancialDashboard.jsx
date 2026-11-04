@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import { db, collection, query, where, addDoc, deleteDoc, updateDoc, doc, serverTimestamp, onSnapshot } from '../firebase'
-import { Timestamp } from 'firebase/firestore'
-import { DollarSign, TrendingUp, TrendingDown, Wallet, Calendar, Copy, Trash2, PlusCircle, CheckCircle, Clock, Download, Store, CreditCard, Banknote, Smartphone, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Minus, Plus, Equal, Pencil, X, Check } from 'lucide-react'
-import { BARBERS, STORES } from '../data/barbers'
+import { Timestamp, arrayUnion } from 'firebase/firestore'
+import { DollarSign, TrendingUp, TrendingDown, Wallet, Copy, Trash2, PlusCircle, CheckCircle, Clock, Download, CreditCard, Banknote, Smartphone, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, X, Check } from 'lucide-react'
+import { BARBERS } from '../data/barbers'
+import { CATEGORIAS, categoriaDe, LOJAS, rotuloLoja, FORMAS_PAGAMENTO, grupoDe, ehReceitaManual, calcularFinanceiro } from '../utils/financeiro'
+import { ContasAPagar, PagueiModal, ContasRecorrentes } from './FinanceiroContas'
 
 // ==========================================
 // CONSTANTES
@@ -10,51 +12,17 @@ import { BARBERS, STORES } from '../data/barbers'
 
 const fmt = (val) => (val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
-const DRE_CATEGORIES = [
-    { id: 'imposto', label: 'Imposto', group: 'impostos' },
-    { id: 'despesa_venda', label: 'Despesa de Venda', group: 'despesas_venda' },
-    { id: 'despesa_operacional', label: 'Despesa Operacional', group: 'despesas_operacionais' },
-    { id: 'receita_celcoin', label: 'Receita - Assinatura Celcoin', group: 'receita_vendas' },
-    { id: 'receita_diversa', label: 'Receita Diversa', group: 'diversas' },
-    { id: 'despesa_diversa', label: 'Despesa Diversa', group: 'diversas' }
-]
-
-const SUB_CATEGORIES = {
-    imposto: ['DAS', 'ICMS', 'ISSQN', 'Outros impostos'],
-    despesa_venda: ['Custo produto vendido', 'Frete'],
-    despesa_operacional: [
-        'Aluguel', 'Água', 'Luz', 'Internet', 'Salário', 'Pró-labore',
-        'Contador', 'Marketing', 'App Booksy', 'TV a cabo', 'Sistema gestão',
-        'FGTS', 'INSS', 'Material de consumo', 'Material de adm',
-        'Manutenção e reformas', 'Custo dos produtos utilizados'
-    ],
-    receita_celcoin: ['Assinatura mensal', 'Assinatura trimestral', 'Assinatura semestral', 'Assinatura anual'],
-    receita_diversa: ['Rendimento financeiro', 'Outras receitas'],
-    despesa_diversa: ['Tarifas bancárias', 'Juros e multas', 'Outras despesas']
-}
-
-const STORE_OPTIONS = [
-    { id: 'loja01', label: 'Loja 01' },
-    { id: 'loja02', label: 'Loja 02' },
-    { id: 'global', label: 'Global (ambas)' }
-]
-
 const STATUS_OPTIONS = [
     { id: 'pago', label: 'Pago', color: 'green' },
-    { id: 'pendente', label: 'Pendente', color: 'yellow' },
+    { id: 'pendente', label: 'A pagar (previsto)', color: 'yellow' },
     { id: 'provisionado', label: 'Provisionado', color: 'blue' }
 ]
 
 // A partir deste mês a receita de cartão da Celcoin vem de pagamentos_assinatura
 // (webhook), e não é mais digitada à mão em receita_celcoin.
 const CELCOIN_AUTO_DESDE = '2026-11'
-const UNIDADE_PARA_LOJA = { '01': 'loja01', '02': 'loja02' }
-
-// Helpers de classificação (mesma lógica do ReportsDashboard)
-const isFinancial = (item) => ['adiantamento', 'fechamento_comissao'].includes(item.tipo)
-const isNonCashRevenue = (item) => ['Assinante', 'Vale Presente'].includes(item.forma_pagamento)
-const isService = (item) => !isFinancial(item)
-const isRevenue = (item) => !isFinancial(item) && !isNonCashRevenue(item)
+const pctTxt = (p) => `${Math.round((p || 0) * 100)}%`
+const rotuloCategoria = (item) => categoriaDe(item.categoria)?.label || item.finance_category || item.finance_type || 'Sem categoria'
 
 // ==========================================
 // COMPONENTE PRINCIPAL
@@ -73,13 +41,18 @@ export function FinancialDashboard() {
     const [deleteCollection, setDeleteCollection] = useState('financeiro')
     const [editingId, setEditingId] = useState(null)
     const [editData, setEditData] = useState({})
+    // Todos os lançamentos manuais (contas a pagar olha todos os meses) e as recorrências
+    const [allFinance, setAllFinance] = useState([])
+    const [recorrencias, setRecorrencias] = useState([])
+    const [pagando, setPagando] = useState(null)
 
     // Form
     const [newEntry, setNewEntry] = useState({
         description: '',
         amount: '',
         store_id: 'loja01',
-        finance_category: 'despesa_operacional',
+        categoria: 'outros',
+        forma_pagamento: 'Pix',
         status: 'pago',
         date: new Date().toISOString().slice(0, 10),
         due_date: '',
@@ -122,11 +95,14 @@ export function FinancialDashboard() {
         // 2. Financeiro (lançamentos manuais)
         const financeQ = query(collection(db, 'financeiro'))
         const unsubFinance = onSnapshot(financeQ, (snapshot) => {
-            const docs = snapshot.docs
-                .map(d => ({ id: d.id, ...d.data() }))
-                .filter(d => d.competence_month === month || (d.date >= month + '-01' && d.date <= month + '-31'))
+            const todos = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+            setAllFinance(todos)
+            const docs = todos.filter(d => d.competence_month === month || (d.date >= month + '-01' && d.date <= month + '-31'))
             setFinancialData(docs.sort((a, b) => (b.date || '').localeCompare(a.date || '')))
         })
+        const unsubRec = onSnapshot(collection(db, 'contas_recorrentes'), (snapshot) => {
+            setRecorrencias(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR')))
+        }, (err) => console.error('contas_recorrentes:', err))
 
         // 3. Movimentações de Capital
         const movementQ = query(collection(db, 'movimentacoes'))
@@ -148,232 +124,18 @@ export function FinancialDashboard() {
             setCelcoinData([])
         }
 
-        return () => { unsubRevenue(); unsubFinance(); unsubMovements(); unsubCelcoin() }
+        return () => { unsubRevenue(); unsubFinance(); unsubRec(); unsubMovements(); unsubCelcoin() }
     }, [month])
 
-    // Receita de cartão Celcoin por loja (sem unidade conhecida = global, como no financeiro manual)
-    const celcoinAuto = (storeFilter) => celcoinData
-        .filter(d => storeFilter === 'consolidado' || (UNIDADE_PARA_LOJA[d.unidade] || 'global') === storeFilter || !UNIDADE_PARA_LOJA[d.unidade])
-        .reduce((s, d) => s + (parseFloat(d.valor) || 0), 0)
-
     // ==========================================
-    // DRE CALCULATIONS
+    // DRE E FLUXO DE CAIXA (utils/financeiro: Geral rateado pelo faturamento de cada loja)
     // ==========================================
 
-    const dre = useMemo(() => {
-        const normalizeStore = (d) => {
-            const barber = BARBERS.find(b => b.id === d.barbeiro_id)
-            const store = barber?.store || d.loja_id || 'loja-01'
-            return store.replace('loja-', 'loja').replace('-', '')
-        }
-
-        const calcStore = (storeFilter) => {
-            // Filter lancamentos by store
-            const storeLanc = storeFilter === 'consolidado'
-                ? revenueData
-                : revenueData.filter(d => normalizeStore(d) === storeFilter)
-
-            const services = storeLanc.filter(d => isService(d))
-            const revenueItems = storeLanc.filter(d => isRevenue(d))
-
-            // storeFinance (mover antes da receita para usar com Celcoin)
-            const storeFinance = storeFilter === 'consolidado'
-                ? financialData
-                : financialData.filter(d => d.store_id === storeFilter || d.store_id === 'global')
-
-            // (+) Receita de Vendas (4 sub-linhas + Celcoin manual)
-            const vendaServico = revenueItems
-                .filter(d => d.tipo === 'servico' || !d.tipo)
-                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-            const vendaAssinaturaLoja = revenueItems
-                .filter(d => d.tipo === 'venda_assinatura' || d.tipo === 'renovacao_celcoin')
-                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-            const vendaCelcoin = storeFinance
-                .filter(d => d.finance_category === 'receita_celcoin' && d.status !== 'provisionado')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0) + celcoinAuto(storeFilter)
-            const vendaAssinaturas = vendaAssinaturaLoja + vendaCelcoin
-            const vendaVale = revenueItems
-                .filter(d => d.tipo === 'venda_vale')
-                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-            const vendaProduto = revenueItems
-                .filter(d => d.tipo === 'produto')
-                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-            const receitaVendas = vendaServico + vendaAssinaturas + vendaVale + vendaProduto
-
-            // (-) Impostos (manual)
-            const impostos = storeFinance
-                .filter(d => d.finance_category === 'imposto' && d.status !== 'provisionado')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
-            const impostosDetail = storeFinance
-                .filter(d => d.finance_category === 'imposto' && d.status !== 'provisionado')
-
-            // (=) Receita Líquida
-            const receitaLiquida = receitaVendas - impostos
-
-            // (-) Despesas de Vendas
-            // Comissão de serviços com receita (din/pix/cartão) - só tipo servico
-            const comissaoReceita = services
-                .filter(d => d.tipo === 'servico' || !d.tipo)
-                .filter(d => !isNonCashRevenue(d))
-                .reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-            // Comissão de serviços assinante/vale - só tipo servico
-            const comissaoAssinVale = services
-                .filter(d => d.tipo === 'servico' || !d.tipo)
-                .filter(d => isNonCashRevenue(d))
-                .reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-            // Comissão de produtos (R$5 fixo por venda)
-            const comissaoProduto = services
-                .filter(d => d.tipo === 'produto')
-                .reduce((s, d) => {
-                    const com = parseFloat(d.comissao_barbeiro) || 0
-                    return s + (com > 0 ? com : 5)
-                }, 0)
-            // Taxa cartão (automático)
-            const taxaCartao = revenueItems.reduce((s, d) => {
-                const pm = d.forma_pagamento?.toLowerCase() || ''
-                const val = parseFloat(d.valor_bruto) || 0
-                if (pm.includes('crédit') || pm.includes('credit') || pm === 'crédito' || pm === 'credito') return s + val * 0.05
-                if (pm.includes('débit') || pm.includes('debit') || pm === 'débito' || pm === 'debito') return s + val * 0.02
-                return s
-            }, 0)
-            // Despesas de venda manuais
-            const despVendaManual = storeFinance
-                .filter(d => d.finance_category === 'despesa_venda' && d.status !== 'provisionado')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
-            const despVendaManualDetail = storeFinance
-                .filter(d => d.finance_category === 'despesa_venda' && d.status !== 'provisionado')
-
-            const totalDespVenda = comissaoReceita + comissaoAssinVale + comissaoProduto + taxaCartao + despVendaManual
-
-            // (=) Lucro Bruto
-            const lucroBruto = receitaLiquida - totalDespVenda
-
-            // (-) Despesas Operacionais (fixas - manual)
-            const despOperacionais = storeFinance
-                .filter(d => d.finance_category === 'despesa_operacional' && d.status !== 'provisionado')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
-            const despOperacionaisDetail = storeFinance
-                .filter(d => d.finance_category === 'despesa_operacional' && d.status !== 'provisionado')
-
-            // (=) Lucro Operacional
-            const lucroOperacional = lucroBruto - despOperacionais
-
-            // (+/-) Receitas/Despesas Diversas
-            const receitasDiversas = storeFinance
-                .filter(d => d.finance_category === 'receita_diversa' && d.status !== 'provisionado')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
-            const despesasDiversas = storeFinance
-                .filter(d => d.finance_category === 'despesa_diversa' && d.status !== 'provisionado')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
-            const diversasDetail = storeFinance
-                .filter(d => (d.finance_category === 'receita_diversa' || d.finance_category === 'despesa_diversa') && d.status !== 'provisionado')
-
-            const saldoDiversas = receitasDiversas - despesasDiversas
-
-            // (=) Lucro/Prejuízo Final
-            const lucroFinal = lucroOperacional + saldoDiversas
-
-            return {
-                vendaServico, vendaAssinaturas, vendaVale, vendaProduto, vendaCelcoin, receitaVendas,
-                impostos, impostosDetail,
-                receitaLiquida,
-                comissaoReceita, comissaoAssinVale, comissaoProduto, taxaCartao, despVendaManual, despVendaManualDetail, totalDespVenda,
-                lucroBruto,
-                despOperacionais, despOperacionaisDetail,
-                lucroOperacional,
-                receitasDiversas, despesasDiversas, diversasDetail, saldoDiversas,
-                lucroFinal
-            }
-        }
-
-        return {
-            loja01: calcStore('loja01'),
-            loja02: calcStore('loja02'),
-            consolidado: calcStore('consolidado')
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [revenueData, financialData, celcoinData])
-
-    // Fluxo de Caixa
-    const cashFlow = useMemo(() => {
-        const calcCash = (storeFilter) => {
-            const normalizeStore = (d) => {
-                const barber = BARBERS.find(b => b.id === d.barbeiro_id)
-                const store = barber?.store || d.loja_id || 'loja-01'
-                return store.replace('loja-', 'loja').replace('-', '')
-            }
-
-            const storeLanc = storeFilter === 'consolidado'
-                ? revenueData
-                : revenueData.filter(d => normalizeStore(d) === storeFilter)
-
-            const services = storeLanc.filter(d => isService(d))
-            const revenueItems = storeLanc.filter(d => isRevenue(d))
-
-            // Entradas imediatas (dinheiro + pix + débito)
-            const dinheiro = revenueItems.filter(d => d.forma_pagamento?.toLowerCase().includes('dinheiro'))
-                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-            const pix = revenueItems.filter(d => d.forma_pagamento?.toLowerCase().includes('pix'))
-                .reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-            const debito = revenueItems.filter(d => {
-                const pm = d.forma_pagamento?.toLowerCase() || ''
-                return pm.includes('débit') || pm.includes('debit') || pm === 'débito' || pm === 'debito'
-            }).reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-
-            // Crédito (antecipação já embutida no desconto - cai na conta na hora)
-            const credito = revenueItems.filter(d => {
-                const pm = d.forma_pagamento?.toLowerCase() || ''
-                return pm.includes('crédit') || pm.includes('credit') || pm === 'crédito' || pm === 'credito'
-            }).reduce((s, d) => s + (parseFloat(d.valor_bruto) || 0), 0)
-
-            // Celcoin (entrada manual paga)
-            const storeFinance = storeFilter === 'consolidado'
-                ? financialData
-                : financialData.filter(d => d.store_id === storeFilter || d.store_id === 'global')
-            const celcoinPago = storeFinance
-                .filter(d => d.finance_category === 'receita_celcoin' && d.status === 'pago')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0) + celcoinAuto(storeFilter)
-
-            const totalEntradas = dinheiro + pix + debito + credito + celcoinPago
-
-            // Saídas do mês
-            const despesasManuais = storeFinance
-                .filter(d => d.status === 'pago' && d.finance_category !== 'receita_diversa' && d.finance_category !== 'receita_celcoin')
-                .reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
-
-            // Comissões automáticas (saída)
-            const comissaoServicos = services
-                .filter(d => d.tipo === 'servico' || !d.tipo)
-                .reduce((s, d) => s + (parseFloat(d.comissao_barbeiro) || 0), 0)
-            const comissaoProdutos = services
-                .filter(d => d.tipo === 'produto')
-                .reduce((s, d) => {
-                    const com = parseFloat(d.comissao_barbeiro) || 0
-                    return s + (com > 0 ? com : 5)
-                }, 0)
-            const comissaoTotal = comissaoServicos + comissaoProdutos
-
-            // Taxa cartão automática (saída)
-            const taxaCartao = revenueItems.reduce((s, d) => {
-                const pm = d.forma_pagamento?.toLowerCase() || ''
-                const val = parseFloat(d.valor_bruto) || 0
-                if (pm.includes('crédit') || pm.includes('credit') || pm === 'crédito' || pm === 'credito') return s + val * 0.05
-                if (pm.includes('débit') || pm.includes('debit') || pm === 'débito' || pm === 'debito') return s + val * 0.02
-                return s
-            }, 0)
-
-            const totalSaidas = despesasManuais + comissaoTotal + taxaCartao
-
-            return { dinheiro, pix, debito, credito, celcoinPago, totalEntradas, despesasManuais, comissaoTotal, taxaCartao, totalSaidas }
-        }
-
-        return {
-            loja01: calcCash('loja01'),
-            loja02: calcCash('loja02'),
-            consolidado: calcCash('consolidado')
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [revenueData, financialData, celcoinData])
+    const calculo = useMemo(() => calcularFinanceiro({ lancamentos: revenueData, financeiro: financialData, celcoin: celcoinData, barbers: BARBERS }),
+        [revenueData, financialData, celcoinData])
+    const dre = calculo.dre
+    const cashFlow = calculo.caixa
+    const rateio = calculo.rateio
 
     // Capital stats
     const capitalStats = useMemo(() => {
@@ -401,7 +163,10 @@ export function FinancialDashboard() {
                 description: newEntry.description,
                 amount: val,
                 store_id: newEntry.store_id,
-                finance_category: newEntry.finance_category,
+                // Categoria padronizada; finance_category = linha do DRE (as outras telas leem esse campo)
+                categoria: newEntry.categoria,
+                finance_category: categoriaDe(newEntry.categoria).grupo,
+                forma_pagamento: newEntry.forma_pagamento || null,
                 status: newEntry.status,
                 date: newEntry.date,
                 due_date: newEntry.due_date || null,
@@ -423,7 +188,8 @@ export function FinancialDashboard() {
             description: item.description || '',
             amount: (item.amount || item.value || 0).toString(),
             store_id: item.store_id || 'loja01',
-            finance_category: item.finance_category || 'despesa_operacional',
+            categoria: item.categoria || 'outros',
+            forma_pagamento: item.forma_pagamento || '',
             status: item.status || 'pago',
             date: item.date || '',
             due_date: item.due_date || '',
@@ -448,7 +214,9 @@ export function FinancialDashboard() {
                 description: editData.description,
                 amount: val,
                 store_id: editData.store_id,
-                finance_category: editData.finance_category,
+                categoria: editData.categoria,
+                finance_category: categoriaDe(editData.categoria).grupo,
+                forma_pagamento: editData.forma_pagamento || null,
                 status: editData.status,
                 date: editData.date,
                 due_date: editData.due_date || null,
@@ -492,7 +260,12 @@ export function FinancialDashboard() {
     const confirmDelete = (id, col = 'financeiro') => { setDeleteId(id); setDeleteCollection(col) }
     const executeDelete = async () => {
         if (!deleteId) return
-        try { await deleteDoc(doc(db, deleteCollection, deleteId)); setDeleteId(null) }
+        try {
+            // Conta gerada por recorrência: o mês vira "pulado" para não ser gerada de novo
+            const item = deleteCollection === 'financeiro' ? financialData.find(d => d.id === deleteId) : null
+            if (item?.recorrencia_id) await updateDoc(doc(db, 'contas_recorrentes', item.recorrencia_id), { pulados: arrayUnion(item.competence_month) })
+            await deleteDoc(doc(db, deleteCollection, deleteId)); setDeleteId(null)
+        }
         catch (e) { alert("Erro: " + e.message) }
     }
 
@@ -528,13 +301,13 @@ export function FinancialDashboard() {
 
     // Export
     const handleExportAI = () => {
-        const report = { period: month, dre: dre[activeTab], cashFlow: cashFlow[activeTab], entries: financialData }
+        const report = { period: month, rateio, dre: dre[activeTab], cashFlow: cashFlow[activeTab], entries: financialData }
         navigator.clipboard.writeText(JSON.stringify(report, null, 2))
         alert("Copiado para IA!")
     }
 
     const handleExportJSON = () => {
-        const report = { metadata: { generated_at: new Date().toISOString(), period: month }, dre, cashFlow, entries: financialData, movements: movementsData }
+        const report = { metadata: { generated_at: new Date().toISOString(), period: month }, rateio, dre, cashFlow, entries: financialData, movements: movementsData }
         const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -587,6 +360,13 @@ export function FinancialDashboard() {
                 </div>
             </div>
 
+            {/* CONTAS A PAGAR (todos os meses) */}
+            <ContasAPagar financeiro={allFinance} onPagar={setPagando} />
+            {pagando && <PagueiModal conta={pagando} financeiro={allFinance} onFechar={() => setPagando(null)} />}
+
+            {/* RESUMO POR LOJA */}
+            <ResumoPorLoja dre={dre} rateio={rateio} />
+
             {/* TABS */}
             <div className="flex gap-2">
                 {[
@@ -623,11 +403,9 @@ export function FinancialDashboard() {
                         </DreSection>
 
                         {/* (-) Impostos */}
-                        <DreSection sign="-" label="Impostos" total={activeDre.impostos} color="red">
-                            {activeDre.impostosDetail.map(d => (
-                                <DreLine key={d.id} label={d.description} value={parseFloat(d.amount) || 0} />
-                            ))}
-                            {activeDre.impostosDetail.length === 0 && <DreLine label="Nenhum imposto lançado" value={0} muted />}
+                        <DreSection sign="-" label="Impostos" total={activeDre.impostos} previsto={activeDre.impostosPrevisto} color="red">
+                            {activeDre.impostosLinhas.map(l => <DreLine key={l.label} label={l.label} value={l.total} previsto={l.previsto} />)}
+                            {activeDre.impostosLinhas.length === 0 && <DreLine label="Nenhum imposto lançado" value={0} muted />}
                         </DreSection>
 
                         {/* (=) Receita Líquida */}
@@ -639,20 +417,16 @@ export function FinancialDashboard() {
                             <DreLine label="Comissão (Assinante/Vale)" value={activeDre.comissaoAssinVale} auto />
                             <DreLine label="Comissão produtos (R$5/un)" value={activeDre.comissaoProduto} auto />
                             <DreLine label="Taxa de cartão" value={activeDre.taxaCartao} auto />
-                            {activeDre.despVendaManualDetail.map(d => (
-                                <DreLine key={d.id} label={d.description} value={parseFloat(d.amount) || 0} />
-                            ))}
+                            {activeDre.despVendaLinhas.map(l => <DreLine key={l.label} label={l.label} value={l.total} previsto={l.previsto} />)}
                         </DreSection>
 
                         {/* (=) Lucro Bruto */}
                         <DreTotal label="Lucro Bruto" value={activeDre.lucroBruto} />
 
                         {/* (-) Despesas Operacionais */}
-                        <DreSection sign="-" label="Despesas Operacionais (fixas)" total={activeDre.despOperacionais} color="orange">
-                            {activeDre.despOperacionaisDetail.map(d => (
-                                <DreLine key={d.id} label={d.description} value={parseFloat(d.amount) || 0} />
-                            ))}
-                            {activeDre.despOperacionaisDetail.length === 0 && <DreLine label="Nenhuma despesa operacional" value={0} muted />}
+                        <DreSection sign="-" label="Despesas Operacionais" total={activeDre.despOperacionais} previsto={activeDre.despOperacionaisPrevisto} color="orange">
+                            {activeDre.despOperacionaisLinhas.map(l => <DreLine key={l.label} label={l.label} value={l.total} previsto={l.previsto} destaque={l.geral} />)}
+                            {activeDre.despOperacionaisLinhas.length === 0 && <DreLine label="Nenhuma despesa operacional" value={0} muted />}
                         </DreSection>
 
                         {/* (=) Lucro Operacional */}
@@ -660,15 +434,27 @@ export function FinancialDashboard() {
 
                         {/* (+/-) Receitas/Despesas Diversas */}
                         <DreSection sign="+/-" label="Receitas/Despesas Diversas" total={activeDre.saldoDiversas} color="blue">
-                            {activeDre.diversasDetail.map(d => (
-                                <DreLine key={d.id} label={d.description} value={parseFloat(d.amount) || 0}
-                                    positive={d.finance_category === 'receita_diversa'} />
-                            ))}
-                            {activeDre.diversasDetail.length === 0 && <DreLine label="Nenhum lançamento" value={0} muted />}
+                            {activeDre.diversasLinhas.map(l => <DreLine key={(l.positivo ? '+' : '-') + l.label} label={l.label} value={l.total} previsto={l.previsto} positive={l.positivo} />)}
+                            {activeDre.diversasLinhas.length === 0 && <DreLine label="Nenhum lançamento" value={0} muted />}
                         </DreSection>
 
                         {/* (=) Lucro/Prejuízo Final */}
                         <DreTotal label="Lucro/Prejuízo Final" value={activeDre.lucroFinal} highlight final />
+
+                        {/* Depois do resultado: pró-labore (retirada do dono, não é despesa operacional) */}
+                        <DreSection sign="-" label="Pró-labore (retirada do dono)" total={activeDre.proLabore} previsto={activeDre.proLaborePrevisto} color="red">
+                            {activeDre.proLaboreLinhas.map(l => <DreLine key={l.label} label={l.label} value={l.total} previsto={l.previsto} destaque={l.geral} />)}
+                            {activeDre.proLaboreLinhas.length === 0 && <DreLine label="Nenhuma retirada lançada" value={0} muted />}
+                        </DreSection>
+                        <DreTotal label="Sobra depois do pró-labore" value={activeDre.sobra} highlight />
+
+                        {/* Pago x previsto */}
+                        <div className="px-5 py-3 bg-gray-950/40 text-xs space-y-1">
+                            <div className="flex justify-between text-gray-400"><span>Já pago / recebido (sem o previsto)</span><span className="font-semibold text-gray-200">{fmt(activeDre.lucroFinalPago)}</span></div>
+                            <div className="flex justify-between text-yellow-400/90"><span>Previsto: contas a pagar</span><span>− {fmt(activeDre.despesasPrevistas)}</span></div>
+                            {activeDre.receitasPrevistas > 0 && <div className="flex justify-between text-green-400/90"><span>Previsto: receitas a receber</span><span>+ {fmt(activeDre.receitasPrevistas)}</span></div>}
+                            <div className="text-[10px] text-gray-600">O resultado acima inclui o previsto (competência). "Já pago" mostra só o que já aconteceu, antes do pró-labore.</div>
+                        </div>
                     </div>
                 </div>
             )}
@@ -717,6 +503,9 @@ export function FinancialDashboard() {
                 </div>
             )}
 
+            {/* CONTAS RECORRENTES */}
+            <ContasRecorrentes recorrencias={recorrencias} financeiro={allFinance} mes={month} />
+
             {/* FORMULÁRIO LANÇAMENTO */}
             <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
                 <div className="px-5 py-4 border-b border-gray-800">
@@ -727,25 +516,25 @@ export function FinancialDashboard() {
                 <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <input type="text" placeholder="Descrição..." value={newEntry.description}
                         onChange={e => setNewEntry({ ...newEntry, description: e.target.value })}
-                        className="col-span-2 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500"
-                        list="subcategories" />
-                    <datalist id="subcategories">
-                        {(SUB_CATEGORIES[newEntry.finance_category] || []).map(s => (
-                            <option key={s} value={s} />
-                        ))}
-                    </datalist>
+                        className="col-span-2 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500" />
                     <input type="text" placeholder="R$ Valor" value={newEntry.amount}
                         onChange={e => setNewEntry({ ...newEntry, amount: e.target.value })}
                         className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500" />
-                    <select value={newEntry.finance_category}
-                        onChange={e => setNewEntry({ ...newEntry, finance_category: e.target.value })}
+                    <select value={newEntry.categoria}
+                        onChange={e => setNewEntry({ ...newEntry, categoria: e.target.value })}
+                        title={categoriaDe(newEntry.categoria)?.dica || ''}
                         className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500">
-                        {DRE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                        {CATEGORIAS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                     </select>
                     <select value={newEntry.store_id}
                         onChange={e => setNewEntry({ ...newEntry, store_id: e.target.value })}
                         className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500">
-                        {STORE_OPTIONS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                        {LOJAS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    </select>
+                    <select value={newEntry.forma_pagamento}
+                        onChange={e => setNewEntry({ ...newEntry, forma_pagamento: e.target.value })}
+                        className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500">
+                        {FORMAS_PAGAMENTO.map(f => <option key={f}>{f}</option>)}
                     </select>
                     <select value={newEntry.status}
                         onChange={e => setNewEntry({ ...newEntry, status: e.target.value })}
@@ -832,17 +621,23 @@ export function FinancialDashboard() {
                                             className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500" />
                                     </td>
                                     <td className="px-2 py-1.5">
-                                        <select value={editData.finance_category}
-                                            onChange={e => setEditData({ ...editData, finance_category: e.target.value })}
+                                        <select value={editData.categoria}
+                                            onChange={e => setEditData({ ...editData, categoria: e.target.value })}
                                             className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500">
-                                            {DRE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                            {CATEGORIAS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                                         </select>
                                     </td>
                                     <td className="px-2 py-1.5">
                                         <select value={editData.store_id}
                                             onChange={e => setEditData({ ...editData, store_id: e.target.value })}
                                             className="bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500">
-                                            {STORE_OPTIONS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                                            {LOJAS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                                        </select>
+                                        <select value={editData.forma_pagamento}
+                                            onChange={e => setEditData({ ...editData, forma_pagamento: e.target.value })}
+                                            className="mt-1 bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-white text-xs w-full outline-none focus:border-cyan-500">
+                                            <option value="">Forma —</option>
+                                            {FORMAS_PAGAMENTO.map(f => <option key={f}>{f}</option>)}
                                         </select>
                                     </td>
                                     <td className="px-2 py-1.5">
@@ -898,16 +693,20 @@ export function FinancialDashboard() {
                                     </td>
                                     <td className="px-4 py-2.5 font-medium">{item.description}</td>
                                     <td className="px-4 py-2.5">
-                                        <span className={`text-xs px-2 py-0.5 rounded border ${getCategoryStyle(item.finance_category)}`}>
-                                            {DRE_CATEGORIES.find(c => c.id === item.finance_category)?.label || item.finance_category || item.finance_type || 'Outro'}
+                                        <span className={`text-xs px-2 py-0.5 rounded border ${getCategoryStyle(grupoDe(item))}`}>
+                                            {rotuloCategoria(item)}
                                         </span>
+                                        {item.recorrencia_id && <span className="ml-1 text-[10px] text-cyan-500">recorrente</span>}
                                     </td>
-                                    <td className="px-4 py-2.5 text-gray-400 text-xs">{STORE_OPTIONS.find(s => s.id === item.store_id)?.label || item.store_id}</td>
-                                    <td className={`px-4 py-2.5 text-right font-bold ${(item.finance_category === 'receita_diversa' || item.finance_category === 'receita_celcoin') ? 'text-green-400' : 'text-red-400'}`}>
-                                        {(item.finance_category === 'receita_diversa' || item.finance_category === 'receita_celcoin') ? '+' : '-'} {fmt(parseFloat(item.amount || item.value || 0))}
+                                    <td className="px-4 py-2.5 text-gray-400 text-xs">{rotuloLoja(item.store_id)}{item.forma_pagamento ? <span className="block text-gray-600">{item.forma_pagamento}</span> : null}</td>
+                                    <td className={`px-4 py-2.5 text-right font-bold ${ehReceitaManual(item) ? 'text-green-400' : 'text-red-400'}`}>
+                                        {ehReceitaManual(item) ? '+' : '-'} {fmt(parseFloat(item.amount || item.value || 0))}
                                     </td>
                                     <td className="px-4 py-2.5 text-center">
                                         <StatusBadge status={item.status} onClick={() => toggleStatus(item)} />
+                                        {item.status === 'pendente' && !ehReceitaManual(item) && (
+                                            <button type="button" onClick={() => setPagando(item)} className="block mx-auto mt-1 text-[10px] font-bold text-emerald-400 underline">Paguei</button>
+                                        )}
                                     </td>
                                     <td className="px-4 py-2.5 text-right">
                                         <div className="flex items-center justify-end gap-1">
@@ -1029,7 +828,50 @@ export function FinancialDashboard() {
 // DRE SUB-COMPONENTS
 // ==========================================
 
-function DreSection({ sign, label, total, color, children }) {
+// Resumo das duas lojas e do total; o Geral entra em cada loja pelo rateio do faturamento
+function ResumoPorLoja({ dre, rateio }) {
+    const cols = [['loja01', 'Loja 01'], ['loja02', 'Loja 02'], ['consolidado', 'Total']]
+    const linhas = [
+        ['Receita de vendas', 'receitaVendas'],
+        ['Impostos', 'impostos', true],
+        ['Despesas de vendas', 'totalDespVenda', true],
+        ['Despesas operacionais', 'despOperacionais', true],
+        ['Lucro/prejuízo final', 'lucroFinal', false, true],
+        ['Pró-labore', 'proLabore', true],
+        ['Sobra', 'sobra', false, true],
+    ]
+    return (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                <h3 className="font-bold text-gray-200 text-sm">Resultado por loja</h3>
+                <span className="text-[11px] text-gray-500">Despesas gerais: rateio {pctTxt(rateio.loja01)} Loja 01 / {pctTxt(rateio.loja02)} Loja 02 (faturamento do mês)</span>
+            </div>
+            <table className="w-full text-xs">
+                <thead><tr className="text-gray-500">
+                    <th className="text-left font-medium py-1"></th>
+                    {cols.map(([id, r]) => <th key={id} className="text-right font-medium py-1">{r}</th>)}
+                </tr></thead>
+                <tbody className="text-gray-300">
+                    {linhas.map(([rotulo, campo, menos, total]) => (
+                        <tr key={campo} className={total ? 'border-t border-gray-800 font-bold' : ''}>
+                            <td className="py-1 pr-2">{rotulo}</td>
+                            {cols.map(([id]) => {
+                                const v = dre[id][campo]
+                                return <td key={id} className={`py-1 text-right whitespace-nowrap ${total ? (v >= 0 ? 'text-green-400' : 'text-red-400') : ''}`}>{menos && v ? '− ' : ''}{fmt(v)}</td>
+                            })}
+                        </tr>
+                    ))}
+                    <tr className="text-gray-500">
+                        <td className="py-1 pr-2">· das quais gerais (rateio)</td>
+                        {cols.map(([id]) => <td key={id} className="py-1 text-right whitespace-nowrap">{id === 'consolidado' ? '' : fmt(dre[id].geralOperacional)}</td>)}
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    )
+}
+
+function DreSection({ sign, label, total, previsto, color, children }) {
     const [open, setOpen] = useState(true)
     const signColors = { '+': 'text-green-500', '-': 'text-red-500', '+/-': 'text-blue-500' }
 
@@ -1042,6 +884,7 @@ function DreSection({ sign, label, total, color, children }) {
                     <span className="text-sm font-semibold text-gray-300">{label}</span>
                 </div>
                 <div className="flex items-center gap-3">
+                    {previsto > 0 && <span className="text-[10px] text-yellow-400">pago {fmt(total - previsto)} · previsto {fmt(previsto)}</span>}
                     <span className={`text-sm font-bold ${total > 0 ? (sign === '+' || sign === '+/-' ? 'text-gray-200' : 'text-red-400') : 'text-gray-500'}`}>
                         {fmt(total)}
                     </span>
@@ -1053,12 +896,13 @@ function DreSection({ sign, label, total, color, children }) {
     )
 }
 
-function DreLine({ label, value, auto, muted, positive }) {
+function DreLine({ label, value, auto, muted, positive, previsto, destaque }) {
     return (
         <div className="flex items-center justify-between py-1.5 px-4">
             <div className="flex items-center gap-2">
-                <span className={`text-xs ${muted ? 'text-gray-600 italic' : 'text-gray-400'}`}>{label}</span>
+                <span className={`text-xs ${muted ? 'text-gray-600 italic' : destaque ? 'text-cyan-300' : 'text-gray-400'}`}>{label}</span>
                 {auto && <span className="text-[9px] bg-purple-900/40 text-purple-400 px-1 rounded">AUTO</span>}
+                {previsto > 0 && <span className="text-[9px] bg-yellow-900/40 text-yellow-400 px-1 rounded">{previsto >= value ? 'PREVISTO' : `PREVISTO ${fmt(previsto)}`}</span>}
             </div>
             <span className={`text-xs font-medium ${muted ? 'text-gray-600' : positive ? 'text-green-400' : 'text-gray-300'}`}>
                 {fmt(value)}
@@ -1136,7 +980,8 @@ function getCategoryStyle(cat) {
         despesa_operacional: 'bg-yellow-900/30 text-yellow-400 border-yellow-800/50',
         receita_celcoin: 'bg-cyan-900/30 text-cyan-400 border-cyan-800/50',
         receita_diversa: 'bg-green-900/30 text-green-400 border-green-800/50',
-        despesa_diversa: 'bg-purple-900/30 text-purple-400 border-purple-800/50'
+        despesa_diversa: 'bg-purple-900/30 text-purple-400 border-purple-800/50',
+        pro_labore: 'bg-pink-900/30 text-pink-400 border-pink-800/50'
     }
     return map[cat] || 'bg-gray-800 text-gray-400 border-gray-700'
 }
