@@ -3,7 +3,7 @@ import { db, collection, query, where, addDoc, deleteDoc, updateDoc, doc, server
 import { Timestamp, arrayUnion } from 'firebase/firestore'
 import { DollarSign, TrendingUp, TrendingDown, Wallet, Copy, Trash2, PlusCircle, CheckCircle, Clock, Download, CreditCard, Banknote, Smartphone, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Pencil, X, Check } from 'lucide-react'
 import { BARBERS } from '../data/barbers'
-import { CATEGORIAS, categoriaDe, LOJAS, rotuloLoja, FORMAS_PAGAMENTO, grupoDe, ehReceitaManual, calcularFinanceiro } from '../utils/financeiro'
+import { CATEGORIAS, categoriaDe, LOJAS, rotuloLoja, FORMAS_PAGAMENTO, grupoDe, ehReceitaManual, calcularFinanceiro, doMesCompetencia } from '../utils/financeiro'
 import { ContasAPagar, PagueiModal, ContasRecorrentes } from './FinanceiroContas'
 
 // ==========================================
@@ -22,6 +22,7 @@ const STATUS_OPTIONS = [
 // (webhook), e não é mais digitada à mão em receita_celcoin.
 const CELCOIN_AUTO_DESDE = '2026-11'
 const pctTxt = (p) => `${Math.round((p || 0) * 100)}%`
+const ROTULO_FONTE = { extrato: 'líquido do extrato, lápis da aba Assinaturas', manual: 'digitado no Financeiro', automatico: 'pagamentos aprovados', sem_dado: 'sem dado' }
 const rotuloCategoria = (item) => categoriaDe(item.categoria)?.label || item.finance_category || item.finance_type || 'Sem categoria'
 
 // ==========================================
@@ -45,6 +46,8 @@ export function FinancialDashboard() {
     const [allFinance, setAllFinance] = useState([])
     const [recorrencias, setRecorrencias] = useState([])
     const [pagando, setPagando] = useState(null)
+    const [lapis, setLapis] = useState(null)
+    const [assinantes, setAssinantes] = useState([])
 
     // Form
     const [newEntry, setNewEntry] = useState({
@@ -53,6 +56,7 @@ export function FinancialDashboard() {
         store_id: 'loja01',
         categoria: 'outros',
         forma_pagamento: 'Pix',
+        nao_recorrente: false,
         status: 'pago',
         date: new Date().toISOString().slice(0, 10),
         due_date: '',
@@ -97,9 +101,17 @@ export function FinancialDashboard() {
         const unsubFinance = onSnapshot(financeQ, (snapshot) => {
             const todos = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
             setAllFinance(todos)
-            const docs = todos.filter(d => d.competence_month === month || (d.date >= month + '-01' && d.date <= month + '-31'))
+            // Só competência: cada lançamento aparece apenas no mês da competência
+            const docs = doMesCompetencia(todos, month)
             setFinancialData(docs.sort((a, b) => (b.date || '').localeCompare(a.date || '')))
         })
+        // Líquido do extrato Celcoin (lápis da aba Assinaturas) e assinantes no Pix manual
+        const unsubLapis = onSnapshot(doc(db, 'configuracoes', 'assinaturas_liquido_real'), (snap) => {
+            setLapis(snap.exists() ? snap.data()[month] ?? null : null)
+        }, (err) => console.error('lápis:', err))
+        const unsubAssin = onSnapshot(collection(db, 'assinantes'), (snapshot) => {
+            setAssinantes(snapshot.docs.map(d => d.data()))
+        }, (err) => console.error('assinantes:', err))
         const unsubRec = onSnapshot(collection(db, 'contas_recorrentes'), (snapshot) => {
             setRecorrencias(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR')))
         }, (err) => console.error('contas_recorrentes:', err))
@@ -124,18 +136,19 @@ export function FinancialDashboard() {
             setCelcoinData([])
         }
 
-        return () => { unsubRevenue(); unsubFinance(); unsubRec(); unsubMovements(); unsubCelcoin() }
+        return () => { unsubRevenue(); unsubFinance(); unsubLapis(); unsubAssin(); unsubRec(); unsubMovements(); unsubCelcoin() }
     }, [month])
 
     // ==========================================
     // DRE E FLUXO DE CAIXA (utils/financeiro: Geral rateado pelo faturamento de cada loja)
     // ==========================================
 
-    const calculo = useMemo(() => calcularFinanceiro({ lancamentos: revenueData, financeiro: financialData, celcoin: celcoinData, barbers: BARBERS }),
-        [revenueData, financialData, celcoinData])
+    const calculo = useMemo(() => calcularFinanceiro({ mes: month, lancamentos: revenueData, financeiro: financialData, celcoin: celcoinData, barbers: BARBERS, lapis, assinantes }),
+        [month, revenueData, financialData, celcoinData, lapis, assinantes])
     const dre = calculo.dre
     const cashFlow = calculo.caixa
     const rateio = calculo.rateio
+    const assinatura = calculo.assinatura
 
     // Capital stats
     const capitalStats = useMemo(() => {
@@ -167,6 +180,7 @@ export function FinancialDashboard() {
                 categoria: newEntry.categoria,
                 finance_category: categoriaDe(newEntry.categoria).grupo,
                 forma_pagamento: newEntry.forma_pagamento || null,
+                nao_recorrente: !!newEntry.nao_recorrente,
                 status: newEntry.status,
                 date: newEntry.date,
                 due_date: newEntry.due_date || null,
@@ -174,7 +188,7 @@ export function FinancialDashboard() {
                 competence_month: newEntry.competence_month,
                 created_at: serverTimestamp()
             })
-            setNewEntry({ ...newEntry, description: '', amount: '', due_date: '', payment_date: newEntry.status === 'pago' ? new Date().toISOString().slice(0, 10) : '' })
+            setNewEntry({ ...newEntry, description: '', amount: '', due_date: '', nao_recorrente: false, payment_date: newEntry.status === 'pago' ? new Date().toISOString().slice(0, 10) : '' })
         } catch (e) {
             alert("Erro: " + e.message)
         } finally {
@@ -190,6 +204,7 @@ export function FinancialDashboard() {
             store_id: item.store_id || 'loja01',
             categoria: item.categoria || 'outros',
             forma_pagamento: item.forma_pagamento || '',
+            nao_recorrente: !!item.nao_recorrente,
             status: item.status || 'pago',
             date: item.date || '',
             due_date: item.due_date || '',
@@ -217,6 +232,7 @@ export function FinancialDashboard() {
                 categoria: editData.categoria,
                 finance_category: categoriaDe(editData.categoria).grupo,
                 forma_pagamento: editData.forma_pagamento || null,
+                nao_recorrente: !!editData.nao_recorrente,
                 status: editData.status,
                 date: editData.date,
                 due_date: editData.due_date || null,
@@ -397,7 +413,14 @@ export function FinancialDashboard() {
                         {/* (+) Receita de Vendas */}
                         <DreSection sign="+" label="Receita de Vendas" total={activeDre.receitaVendas} color="green">
                             <DreLine label="Venda de serviços" value={activeDre.vendaServico} auto />
-                            <DreLine label="Venda de assinaturas" value={activeDre.vendaAssinaturas} auto />
+                            <DreLine label="Venda de assinaturas no balcão" value={activeDre.vendaAssinaturaLoja} auto />
+                            <DreLine label={`Assinaturas online: Celcoin (${ROTULO_FONTE[assinatura.fonte]}) + Pix manual${activeTab === 'consolidado' ? '' : ` · ${pctTxt(assinatura.atendimentos[activeTab])} pelos atendimentos de assinante`}`}
+                                value={activeDre.vendaCelcoin} auto />
+                            {assinatura.ignorados.length > 0 && (
+                                <div className="px-4 py-1 text-[11px] text-yellow-400">
+                                    ⚠ {assinatura.ignorados.length} lançamento(s) de "Receita – assinatura Celcoin" no Financeiro não entraram ({fmt(assinatura.ignorados.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0))}), para não contar duas vezes com {assinatura.fonte === 'extrato' ? 'o lápis da aba Assinaturas' : 'os pagamentos aprovados'}.
+                                </div>
+                            )}
                             <DreLine label="Venda de vale presente" value={activeDre.vendaVale} auto />
                             <DreLine label="Venda de produtos" value={activeDre.vendaProduto} auto />
                         </DreSection>
@@ -439,7 +462,11 @@ export function FinancialDashboard() {
                         </DreSection>
 
                         {/* (=) Lucro/Prejuízo Final */}
-                        <DreTotal label="Lucro/Prejuízo Final" value={activeDre.lucroFinal} highlight final />
+                        <DreTotal label="Resultado (lucro/prejuízo final)" value={activeDre.lucroFinal} highlight final />
+                        <div className="px-5 py-2 flex items-center justify-between bg-gray-950/20">
+                            <span className="text-xs text-gray-400">Resultado sem não recorrentes {activeDre.naoRecorrentesDespesas > 0 && <span className="text-gray-600">(volta {fmt(activeDre.naoRecorrentesDespesas)} de despesas que não se repetem)</span>}</span>
+                            <span className={`text-sm font-bold ${activeDre.lucroFinalSemNaoRecorrentes >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>{fmt(activeDre.lucroFinalSemNaoRecorrentes)}</span>
+                        </div>
 
                         {/* Depois do resultado: pró-labore (retirada do dono, não é despesa operacional) */}
                         <DreSection sign="-" label="Pró-labore (retirada do dono)" total={activeDre.proLabore} previsto={activeDre.proLaborePrevisto} color="red">
@@ -472,7 +499,7 @@ export function FinancialDashboard() {
                         <CashCard label="Pix" value={activeCash.pix} icon={Smartphone} color="cyan" />
                         <CashCard label="Débito" value={activeCash.debito} icon={CreditCard} color="orange" />
                         <CashCard label="Crédito" value={activeCash.credito} icon={CreditCard} color="yellow" />
-                        {activeCash.celcoinPago > 0 && <CashCard label="Celcoin" value={activeCash.celcoinPago} icon={Wallet} color="purple" />}
+                        {activeCash.celcoinPago > 0 && <CashCard label="Assinaturas online" value={activeCash.celcoinPago} icon={Wallet} color="purple" />}
                     </div>
 
                     {/* Saídas */}
@@ -536,6 +563,10 @@ export function FinancialDashboard() {
                         className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500">
                         {FORMAS_PAGAMENTO.map(f => <option key={f}>{f}</option>)}
                     </select>
+                    <label className="flex items-center gap-2 text-sm text-gray-300 bg-gray-950 border border-gray-800 rounded-lg px-3 py-2" title="Ex.: manutenção pós-furto. O DRE mostra o resultado com e sem esses lançamentos.">
+                        <input type="checkbox" checked={newEntry.nao_recorrente} onChange={e => setNewEntry({ ...newEntry, nao_recorrente: e.target.checked })} className="accent-cyan-500" />
+                        Não recorrente
+                    </label>
                     <select value={newEntry.status}
                         onChange={e => setNewEntry({ ...newEntry, status: e.target.value })}
                         className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-white text-sm outline-none focus:border-cyan-500">
@@ -639,6 +670,10 @@ export function FinancialDashboard() {
                                             <option value="">Forma —</option>
                                             {FORMAS_PAGAMENTO.map(f => <option key={f}>{f}</option>)}
                                         </select>
+                                        <label className="mt-1 flex items-center gap-1 text-[10px] text-gray-400">
+                                            <input type="checkbox" checked={editData.nao_recorrente} onChange={e => setEditData({ ...editData, nao_recorrente: e.target.checked })} className="accent-cyan-500" />
+                                            não recorrente
+                                        </label>
                                     </td>
                                     <td className="px-2 py-1.5">
                                         <input type="text" value={editData.amount}
@@ -697,6 +732,7 @@ export function FinancialDashboard() {
                                             {rotuloCategoria(item)}
                                         </span>
                                         {item.recorrencia_id && <span className="ml-1 text-[10px] text-cyan-500">recorrente</span>}
+                                        {item.nao_recorrente && <span className="ml-1 text-[10px] text-orange-400">não recorrente</span>}
                                     </td>
                                     <td className="px-4 py-2.5 text-gray-400 text-xs">{rotuloLoja(item.store_id)}{item.forma_pagamento ? <span className="block text-gray-600">{item.forma_pagamento}</span> : null}</td>
                                     <td className={`px-4 py-2.5 text-right font-bold ${ehReceitaManual(item) ? 'text-green-400' : 'text-red-400'}`}>
@@ -836,7 +872,8 @@ function ResumoPorLoja({ dre, rateio }) {
         ['Impostos', 'impostos', true],
         ['Despesas de vendas', 'totalDespVenda', true],
         ['Despesas operacionais', 'despOperacionais', true],
-        ['Lucro/prejuízo final', 'lucroFinal', false, true],
+        ['Resultado', 'lucroFinal', false, true],
+        ['Resultado sem não recorrentes', 'lucroFinalSemNaoRecorrentes'],
         ['Pró-labore', 'proLabore', true],
         ['Sobra', 'sobra', false, true],
     ]

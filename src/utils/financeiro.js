@@ -1,8 +1,11 @@
 // Aba Financeiro: categorias, DRE e fluxo de caixa por loja (com rateio do que é Geral) e contas a pagar.
-// As regras de comissão, taxa de cartão e receitas são as mesmas de antes; muda só:
+// As regras de comissão e taxa de cartão são as mesmas de antes; muda só:
 // - o que é "Geral" (store_id 'global') entra em cada loja pela fatia do faturamento (antes entrava inteiro nas duas)
+// - receita de assinatura online (Celcoin + Pix manual) dividida pelos atendimentos de assinante de cada loja
 // - despesas e receitas manuais separadas em pago e previsto (pendente); provisionado continua fora
 // - pró-labore fora das despesas operacionais, depois do resultado
+// - só competência: o lançamento entra apenas no mês da competência
+import { ehAtendAssinante, formaCobranca, CELCOIN_AUTO_DESDE } from './assinaturas.js'
 
 export const CATEGORIAS = [
     { id: 'aluguel_imovel', label: 'Aluguel e imóvel', grupo: 'despesa_operacional', dica: 'aluguel, IPTU, condomínio, seguro' },
@@ -53,23 +56,45 @@ export function lojaDoLancamento(d, barbers = []) {
 }
 export const lojaDoCelcoin = (d) => UNIDADE_PARA_LOJA[d.unidade] || 'global'
 
-// Receita de vendas só do que é da loja (base do rateio)
-function receitaVendasPropria(lancs, financeiro, celcoin) {
+// Só competência: o lançamento entra no mês da competência (sem competência, o mês da data)
+export const doMesCompetencia = (financeiro, mes) => financeiro.filter(d => (d.competence_month || String(d.date || '').slice(0, 7)) === mes)
+
+// Receita de assinatura online do mês, sem contar duas vezes:
+// até out/2026 o líquido do extrato (lápis da aba Assinaturas), senão o digitado no Financeiro;
+// de nov/2026 em diante os pagamentos aprovados da Celcoin. Lançamento manual que sobra é ignorado (conflito).
+export function receitaAssinaturaOnline({ mes, lapis = null, celcoin = [], financeiro = [] }) {
+    const manuais = financeiro.filter(d => grupoDe(d) === 'receita_celcoin' && d.status !== 'provisionado')
+    const somaManual = r2(manuais.reduce((s, d) => s + n(d.amount), 0))
+    if (mes >= CELCOIN_AUTO_DESDE) return { fonte: 'automatico', valor: r2(celcoin.reduce((s, d) => s + n(d.valor), 0)), ignorados: manuais }
+    if (lapis != null && lapis !== '') return { fonte: 'extrato', valor: r2(n(lapis)), ignorados: manuais }
+    return { fonte: manuais.length ? 'manual' : 'sem_dado', valor: somaManual, ignorados: [] }
+}
+
+// Pix manual (fora da Celcoin): recebido no mês enquanto ativo, como na aba Assinaturas
+export const receitaPixManual = (assinantes, mes) => r2(assinantes
+    .filter(a => formaCobranca(a) === 'pix_manual' && a.status_assinatura === 'ativa' && (!a.inicio_contrato || a.inicio_contrato.slice(0, 7) <= mes))
+    .reduce((s, a) => s + n(a.valor), 0))
+
+// Fatia de cada loja na receita de assinatura online = atendimentos de assinante da loja no mês
+export function rateioAtendimentos(lancamentos, barbers = []) {
+    const atend = lancamentos.filter(ehAtendAssinante)
+    const a1 = atend.filter(d => lojaDoLancamento(d, barbers) === 'loja01').length
+    const a2 = atend.length - a1
+    const p1 = atend.length ? a1 / atend.length : 0.5
+    return { loja01: p1, loja02: 1 - p1, atendimentos: { loja01: a1, loja02: a2 } }
+}
+
+// Receita de vendas da loja (base do rateio das despesas gerais): a dela + a fatia da assinatura online
+function receitaVendasDaLoja(lancs, assinaturaOnline) {
     const rev = lancs.filter(isRevenue)
     const soma = (f) => rev.filter(f).reduce((s, d) => s + n(d.valor_bruto), 0)
     return soma(d => d.tipo === 'servico' || !d.tipo) + soma(d => d.tipo === 'venda_assinatura' || d.tipo === 'renovacao_celcoin')
-        + soma(d => d.tipo === 'venda_vale') + soma(d => d.tipo === 'produto')
-        + financeiro.filter(d => grupoDe(d) === 'receita_celcoin' && d.status !== 'provisionado').reduce((s, d) => s + n(d.amount), 0)
-        + celcoin.reduce((s, d) => s + n(d.valor), 0)
+        + soma(d => d.tipo === 'venda_vale') + soma(d => d.tipo === 'produto') + assinaturaOnline
 }
 
 // Fatia de cada loja no que é Geral = participação no faturamento do mês (sem faturamento: meio a meio)
-export function calcularRateio({ lancamentos = [], financeiro = [], celcoin = [], barbers = [] }) {
-    const f = (loja) => receitaVendasPropria(
-        lancamentos.filter(d => lojaDoLancamento(d, barbers) === loja),
-        financeiro.filter(d => d.store_id === loja),
-        celcoin.filter(d => lojaDoCelcoin(d) === loja),
-    )
+export function calcularRateio({ lancamentos = [], barbers = [], assinaturaOnline = 0, atend = rateioAtendimentos(lancamentos, barbers) }) {
+    const f = (loja) => receitaVendasDaLoja(lancamentos.filter(d => lojaDoLancamento(d, barbers) === loja), assinaturaOnline * atend[loja])
     const f1 = f('loja01'), f2 = f('loja02')
     const total = f1 + f2
     const p1 = total > 0 ? f1 / total : 0.5
@@ -111,7 +136,15 @@ function linhasPorCategoria(itens, loja, rotuloRateio) {
         .sort((a, b) => Number(a.geral) - Number(b.geral) || b.total - a.total)
 }
 
-function dreDe({ lancs, itens, celcoinValor, loja, rotuloRateio }) {
+// Não recorrente (ex.: manutenção pós-furto): o "resultado sem não recorrentes" devolve o que entrou só desta vez
+function naoRecorrentes(itens) {
+    const doMes = itens.filter(d => d.nao_recorrente && d.status !== 'provisionado' && grupoDe(d) !== 'pro_labore' && grupoDe(d) !== 'receita_celcoin')
+    const receitas = doMes.filter(ehReceitaManual).reduce((s, d) => s + valorP(d), 0)
+    const despesas = doMes.filter(d => !ehReceitaManual(d)).reduce((s, d) => s + valorP(d), 0)
+    return { receitas: r2(receitas), despesas: r2(despesas) }
+}
+
+function dreDe({ lancs, itens, assinaturaOnline, loja, rotuloRateio }) {
     const services = lancs.filter(isService)
     const revenueItems = lancs.filter(isRevenue)
     const somaRev = (f) => revenueItems.filter(f).reduce((s, d) => s + n(d.valor_bruto), 0)
@@ -119,8 +152,8 @@ function dreDe({ lancs, itens, celcoinValor, loja, rotuloRateio }) {
     // (+) Receita de vendas
     const vendaServico = somaRev(d => d.tipo === 'servico' || !d.tipo)
     const vendaAssinaturaLoja = somaRev(d => d.tipo === 'venda_assinatura' || d.tipo === 'renovacao_celcoin')
-    const celcoinManual = somaGrupo(itens, 'receita_celcoin')
-    const vendaCelcoin = celcoinManual.total + celcoinValor
+    // Celcoin + Pix manual (já na fatia da loja); o lançamento manual de Celcoin entra por receitaAssinaturaOnline
+    const vendaCelcoin = assinaturaOnline
     const vendaAssinaturas = vendaAssinaturaLoja + vendaCelcoin
     const vendaVale = somaRev(d => d.tipo === 'venda_vale')
     const vendaProduto = somaRev(d => d.tipo === 'produto')
@@ -164,12 +197,15 @@ function dreDe({ lancs, itens, celcoinValor, loja, rotuloRateio }) {
 
     // Previsto (contas a pagar e receitas pendentes): o resultado "só com o pago" tira o que ainda não aconteceu
     const despesasPrevistas = impostos.previsto + despVenda.previsto + operacionais.previsto + despesasDiversas.previsto
-    const receitasPrevistas = celcoinManual.previsto + receitasDiversas.previsto
+    const receitasPrevistas = receitasDiversas.previsto
     const lucroFinalPago = lucroFinal + despesasPrevistas - receitasPrevistas
     const geralOperacional = r2(operacionais.itens.filter(d => d.geral).reduce((s, d) => s + valorP(d), 0))
+    const nr = naoRecorrentes(itens)
 
     return {
-        vendaServico, vendaAssinaturas, vendaVale, vendaProduto, vendaCelcoin, receitaVendas,
+        vendaServico, vendaAssinaturaLoja, vendaAssinaturas, vendaVale, vendaProduto, vendaCelcoin, receitaVendas,
+        naoRecorrentesDespesas: nr.despesas, naoRecorrentesReceitas: nr.receitas,
+        lucroFinalSemNaoRecorrentes: lucroFinal + nr.despesas - nr.receitas,
         impostos: impostos.total, impostosPrevisto: impostos.previsto, impostosLinhas: linhasPorCategoria(impostos.itens, loja, rotuloRateio),
         receitaLiquida,
         comissaoReceita, comissaoAssinVale, comissaoProduto, taxaCartao,
@@ -188,7 +224,7 @@ function dreDe({ lancs, itens, celcoinValor, loja, rotuloRateio }) {
     }
 }
 
-function caixaDe({ lancs, itens, celcoinValor }) {
+function caixaDe({ lancs, itens, assinaturaOnline }) {
     const services = lancs.filter(isService)
     const revenueItems = lancs.filter(isRevenue)
     const somaPm = (f) => revenueItems.filter(d => f(d.forma_pagamento?.toLowerCase() || '')).reduce((s, d) => s + n(d.valor_bruto), 0)
@@ -196,7 +232,8 @@ function caixaDe({ lancs, itens, celcoinValor }) {
     const pix = somaPm(pm => pm.includes('pix'))
     const debito = somaPm(ehDebito)
     const credito = somaPm(ehCredito)
-    const celcoinPago = itens.filter(d => grupoDe(d) === 'receita_celcoin' && d.status === 'pago').reduce((s, d) => s + valorP(d), 0) + celcoinValor
+    // Assinatura online (Celcoin + Pix manual), na fatia da loja
+    const celcoinPago = assinaturaOnline
     const totalEntradas = dinheiro + pix + debito + credito + celcoinPago
     // Saídas pagas (inclui pró-labore: sai do caixa)
     const despesasManuais = itens.filter(d => d.status === 'pago' && !ehReceitaManual(d)).reduce((s, d) => s + valorP(d), 0)
@@ -214,25 +251,28 @@ function caixaDe({ lancs, itens, celcoinValor }) {
 
 const pctTxt = (p) => `${Math.round(p * 100)}%`
 
-// lancamentos: do mês; financeiro: lançamentos manuais do mês; celcoin: cartão aprovado do mês (pagamentos_assinatura)
-export function calcularFinanceiro({ lancamentos = [], financeiro = [], celcoin = [], barbers = [] }) {
-    const rateio = calcularRateio({ lancamentos, financeiro, celcoin, barbers })
+// mes: AAAA-MM; lancamentos: do mês; financeiro: lançamentos manuais da competência do mês;
+// celcoin: cartão aprovado do mês (pagamentos_assinatura); lapis: líquido do extrato do mês (aba Assinaturas)
+export function calcularFinanceiro({ mes = '', lancamentos = [], financeiro = [], celcoin = [], barbers = [], lapis = null, assinantes = [] }) {
+    const online = receitaAssinaturaOnline({ mes, lapis, celcoin, financeiro })
+    const pixManual = receitaPixManual(assinantes, mes)
+    const assinaturaTotal = r2(online.valor + pixManual)
+    const atend = rateioAtendimentos(lancamentos, barbers)
+    const rateio = calcularRateio({ lancamentos, barbers, assinaturaOnline: assinaturaTotal, atend })
     const rotuloRateio = `Despesas gerais (rateio ${pctTxt(rateio.loja01)} / ${pctTxt(rateio.loja02)})`
-    const celcoinDe = (loja) => celcoin.reduce((s, d) => {
-        const dono = lojaDoCelcoin(d)
-        const peso = loja === 'consolidado' || dono === loja ? 1 : dono === 'global' ? rateio[loja] : 0
-        return s + n(d.valor) * peso
-    }, 0)
+    // A receita de Celcoin digitada no Financeiro já entrou em "online" (ou foi ignorada): sai dos itens
+    const itensSemCelcoin = financeiro.filter(d => grupoDe(d) !== 'receita_celcoin')
     const escopo = (loja) => ({
         lancs: loja === 'consolidado' ? lancamentos : lancamentos.filter(d => lojaDoLancamento(d, barbers) === loja),
-        itens: comPeso(financeiro, loja, rateio[loja]),
-        celcoinValor: celcoinDe(loja),
+        itens: comPeso(itensSemCelcoin, loja, rateio[loja]),
+        assinaturaOnline: loja === 'consolidado' ? assinaturaTotal : assinaturaTotal * atend[loja],
         loja,
         rotuloRateio,
     })
     const lojas = ['loja01', 'loja02', 'consolidado']
     return {
         rateio,
+        assinatura: { fonte: online.fonte, online: online.valor, pixManual, total: assinaturaTotal, ignorados: online.ignorados, atendimentos: atend },
         dre: Object.fromEntries(lojas.map(l => [l, dreDe(escopo(l))])),
         caixa: Object.fromEntries(lojas.map(l => [l, caixaDe(escopo(l))])),
     }
