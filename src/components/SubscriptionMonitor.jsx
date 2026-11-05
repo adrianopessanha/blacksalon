@@ -14,7 +14,7 @@ import {
     ehRenovacaoBalcao, tipoLigacao, CELCOIN_AUTO_DESDE, TAXA_MAQUININHA,
 } from '../utils/assinaturas'
 import { precisaDeAcao, mensagemWhatsApp, linkWhatsApp, contatoValido, ddmm, diaSP } from '../utils/acaoAssinantes'
-import { EditarAssinante, AdicionarDependente } from './EditarAssinante'
+import { EditarAssinante, AdicionarDependente, HistoricoContratos } from './EditarAssinante'
 
 const fmt = (v) => (v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }))
 const pct = (v) => (v == null ? '—' : `${v.toFixed(1).replace('.', ',')}%`)
@@ -475,6 +475,7 @@ function LinhaAssinante({ s, assinantes, lancamentos, cidDe, onMudou }) {
                             ))}
                         </div>
                     )}
+                    <HistoricoContratos contratos={cadastro.contratos} atual={cadastro.contrato_atual} />
                     {s.dependentes?.length > 0 && <div className="text-gray-400">Dependentes: {s.dependentes.join(', ')}</div>}
                     {!s.pagador && !semTelefone && <AdicionarDependente pagador={s.telefone} onMudou={onMudou} />}
                 </div>

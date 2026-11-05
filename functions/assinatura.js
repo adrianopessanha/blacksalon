@@ -97,6 +97,8 @@ function parsePagamento(body) {
         pagoFora,
         classe,
         codigoCliente: String(b.codigo_cliente || "").trim() || null,
+        // Número da assinatura na Celcoin (Subscription.galaxPayId): cada número é um contrato
+        assinaturaId: String(b.assinatura_id || b["Subscription.galaxPayId"] || "").trim() || null,
         email: String(b.email || "").trim() || null,
         documento: String(b.documento || "").trim() || null,
         dataPagamento: data,

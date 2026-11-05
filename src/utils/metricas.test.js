@@ -127,3 +127,14 @@ test('faltas: lançamento de serviço do mesmo telefone no mesmo dia conta como 
     const f = faltas(ag, new Set(), '2026-10-25', visitas)
     assert.deepEqual(f.get('A').map(a => a.id), ['x2'])
 })
+
+test('cancelados no mês pelos contratos: quem voltou depois continua contando no mês em que cancelou', () => {
+    const leo = { telefone: 'L', status_assinatura: 'ativa', contratos: [
+        { id: 'c1', forma: 'celcoin', status_assinatura: 'cancelada', fim: '2026-10-24' },
+        { id: 'c2', forma: 'balcao', status_assinatura: 'ativa', inicio: '2026-10-29' },
+    ] }
+    const renovou = { telefone: 'R', status_assinatura: 'ativa', contratos: [{ id: 'c1', status_assinatura: 'encerrado', fim: '2026-10-10', motivo_fim: 'renovado' }, { id: 'c2', status_assinatura: 'ativa' }] }
+    const antigo = { telefone: 'A', status_assinatura: 'cancelada' } // sem contratos: pelo evento
+    const base = { clientes: [], lancamentosMes: [], hoje: '2026-10-31', mes: '2026-10' }
+    assert.equal(painel({ ...base, assinantes: [leo, renovou, antigo], cancelamentos: [{ telefone: 'A', data: '2026-10-05' }] }).canceladosMes, 2)
+})

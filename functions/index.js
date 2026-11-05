@@ -17,6 +17,7 @@ const { cidDe, cidDeAssinante, normalizarTelefone, TELEFONE_RE, CID_RE, DEP_RE, 
 const { decidirVendaBalcao } = require("./balcao");
 const { edicaoAssinante, entradasHistorico, proximoIdDependente, novoDependente, idPagamentoMovido } = require("./edicaoAssinante");
 const { contaDoMes, mesesParaGerar, addMeses } = require("./recorrentes");
+const { contratoAtual, indiceAtual, espelho, contratosIniciais, vendaBalcao, contratoDoEventoCelcoin, novoContratoCelcoin, aplicarNoContrato } = require("./contratos");
 
 const MAKE_SECRET = defineSecret("MAKE_SECRET");
 // Deve bater com o campo webhookSecret que o Make envia no corpo JSON
@@ -389,11 +390,25 @@ exports.registrarPagamentoAssinatura = onRequest(
                 // Data/hora do status na Celcoin (Transaction.statusDate); sem ela, a hora de chegada
                 const dataMs = p.dataPagamento ? p.dataPagamento.getTime() : Date.now();
                 const historico = anterior ? historicoDe(anterior) : [];
+
+                // Contrato Celcoin do evento (nunca o de balcão; número novo = contrato novo)
+                const agoraISO = new Date().toISOString();
+                const contratos = ass ? contratosIniciais(ass, agoraISO).map((c) => ({ ...c })) : [];
+                const dataEvento = p.dataStr || diaSP(new Date());
+                const alvo = contratoDoEventoCelcoin(contratos, { assinaturaId: p.assinaturaId, classe: p.classe, dataStr: dataEvento });
+                let k = alvo.indice;
+                if (alvo.criar) {
+                    contratos.push(novoContratoCelcoin({ contratos, assinaturaId: p.assinaturaId, dataStr: dataEvento, agoraISO }));
+                    k = contratos.length - 1;
+                }
+                if (alvo.gravarNumero) contratos[k].celcoin_assinatura = p.assinaturaId;
+                const contrato = k >= 0 ? contratos[k] : null;
+
                 const decisao = decidirEvento(
                     p,
                     dataMs,
                     anterior ? { dataMs: tsMs(anterior.data_pagamento), historico: historico.map((h) => ({ status: h.status, dataMs: tsMs(h.data_status) })) } : null,
-                    ass ? { statusMs: tsMs(ass.status_evento_em), aprovadoMs: tsMs(ass.ultimo_aprovado_em), aprovadoTx: ass.ultimo_aprovado_tx || null } : null
+                    contrato ? { statusMs: tsMs(contrato.status_evento_em), aprovadoMs: tsMs(contrato.ultimo_aprovado_em), aprovadoTx: contrato.ultimo_aprovado_tx || null } : null
                 );
                 if (decisao.duplicado) return { duplicado: true, situacao: anterior.situacao };
 
@@ -457,20 +472,30 @@ exports.registrarPagamentoAssinatura = onRequest(
                     historico: [...historico, entrada],
                 } : { historico: [...historico, entrada], atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
 
-                const upd = decisao.mudaAssinante ? atualizacaoCliente(p) : { celcoin: true };
+                // Cadastro de cliente: só segue o evento se o contrato dele é o que vale hoje
+                const ehAtual = !!contrato && contratoAtual(contratos) === contrato;
+                const upd = decisao.mudaAssinante && ehAtual ? atualizacaoCliente(p) : { celcoin: true };
                 if (upd.ultimo_pagamento_assinatura instanceof Date) {
                     upd.ultimo_pagamento_assinatura = Timestamp.fromDate(upd.ultimo_pagamento_assinatura);
                 }
                 if (!cliente.exists && p.nome) upd.nome = p.nome;
                 tx.set(clienteRef, { ...upd, atualizado_em: FieldValue.serverTimestamp() }, { merge: true });
                 tx.set(privadoRef(cid), dadosPrivados(p.telefone), { merge: true });
-                const updAss = atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}, ass ? ass.status_assinatura : null, ass ? ass.plano : null);
+
+                // O evento muda só o contrato dele; o status do assinante é o do contrato mais recente
+                const updAss = atualizacaoAssinante(p, planosCelcoin.exists ? planosCelcoin.data() : {}, contrato ? contrato.status_assinatura ?? null : null, contrato ? contrato.plano : null);
+                if (contrato) {
+                    contratos[k] = aplicarNoContrato(contrato, decisao.mudaAssinante ? updAss : semStatus(updAss));
+                    if (decisao.mudaAssinante && updAss.status_assinatura) contratos[k].status_evento_em = dataStatus;
+                    if (decisao.novoAprovado) Object.assign(contratos[k], { ultimo_aprovado_em: dataStatus, ultimo_aprovado_tx: p.transacaoId });
+                }
                 tx.set(assinanteRef, {
-                    ...(decisao.mudaAssinante ? updAss : semStatus(updAss)),
-                    ...(decisao.mudaAssinante && updAss.status_assinatura ? { status_evento_em: dataStatus } : {}),
-                    ...(decisao.novoAprovado ? { ultimo_aprovado_em: dataStatus, ultimo_aprovado_tx: p.transacaoId } : {}),
-                    // Assinante novo da Celcoin: o 1º evento marca o início (define o dia do ciclo)
-                    ...(ass && ass.inicio_contrato ? {} : { inicio_contrato: p.dataStr || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }) }),
+                    telefone: p.telefone,
+                    ...(updAss.nome ? { nome: updAss.nome } : {}),
+                    ...(updAss.codigo_cliente ? { codigo_cliente: updAss.codigo_cliente } : {}),
+                    ...(updAss.plano_id ? { plano_id: updAss.plano_id } : {}),
+                    ...(decisao.mudaAssinante ? { data_ultimo_evento: updAss.data_ultimo_evento } : {}),
+                    ...(contratos.length ? { contratos, ...espelho(contratos) } : {}),
                     ultima_atualizacao: FieldValue.serverTimestamp(),
                 }, { merge: true });
 
@@ -693,7 +718,11 @@ exports.vencerAssinantesBalcao = onSchedule(
             const a = d.data();
             const forma = a.forma_cobranca || (a.origem === "balcao" ? "balcao" : a.origem || "celcoin");
             if (forma !== "balcao" || !a.vencimento || a.vencimento >= hoje) continue;
-            batch.update(d.ref, { status_assinatura: "vencido", data_vencido: hoje, ultima_atualizacao: FieldValue.serverTimestamp() });
+            // Vence o contrato atual (o de balcão); os anteriores ficam como estão
+            const contratos = contratosIniciais(a, new Date().toISOString()).map((c) => ({ ...c }));
+            const k = indiceAtual(contratos);
+            contratos[k] = { ...contratos[k], status_assinatura: "vencido", data_vencido: hoje };
+            batch.update(d.ref, { contratos, ...espelho(contratos), data_vencido: hoje, ultima_atualizacao: FieldValue.serverTimestamp() });
             n++;
         }
         if (n) await batch.commit();
@@ -838,8 +867,18 @@ exports.venderAssinaturaBalcao = onCall(
         const agora = new Date();
         const ref = db.collection("assinantes").doc(telefone);
         const atual = await ref.get();
-        const r = decidirVendaBalcao({ atual: atual.exists ? atual.data() : null, admin, nome, telefone, plano, valor, hoje: diaSP(agora) });
-        if (r.upd) await ref.set({ ...r.upd, ultima_atualizacao: FieldValue.serverTimestamp() }, { merge: true });
+        // Toda venda no balcão abre um contrato novo (data e ciclo novos); o cancelado fica no histórico
+        const a = atual.exists ? atual.data() : null;
+        const r = vendaBalcao({ contratos: a ? contratosIniciais(a, agora.toISOString()) : [], admin, plano, valor, hoje: diaSP(agora), agoraISO: agora.toISOString() });
+        if (r.contratos) {
+            await ref.set({
+                telefone,
+                ...(a && a.nome ? {} : { nome }),
+                contratos: r.contratos,
+                ...espelho(r.contratos),
+                ultima_atualizacao: FieldValue.serverTimestamp(),
+            }, { merge: true });
+        }
 
         const tel = telefoneMake(telefone);
         await avisarMake(MAKE_ASSINATURA_URL, {
@@ -858,7 +897,7 @@ exports.venderAssinaturaBalcao = onCall(
             hora: horaBR(agora),
             data_hora_iso: agora.toISOString(),
         });
-        return { resultado: r.resultado, origem: r.origem };
+        return { resultado: r.resultado, origem: r.origem, aviso: r.aviso || null };
     }
 );
 
@@ -923,10 +962,29 @@ exports.editarAssinante = onCall(
             if (!deps.empty) throw new HttpsError("invalid-argument", "Quem tem dependentes não pode ser dependente de outra pessoa.");
         }
         const em = new Date().toISOString();
+        // Plano, valor, forma, status, início e ciclo são do contrato atual; nome, pagador e observação, do assinante
+        const DO_CONTRATO = { status_assinatura: "status_assinatura", plano: "plano", valor: "valor", forma_cobranca: "forma", ciclo_desde: "ciclo_desde", inicio_contrato: "inicio", vencimento: "vencimento" };
+        const doAssinante = Object.fromEntries(Object.entries(upd).filter(([c]) => !DO_CONTRATO[c]));
+        let contratosUpd = {};
+        if (!DEP_RE.test(id) && Object.keys(upd).some((c) => DO_CONTRATO[c])) {
+            const contratos = contratosIniciais(snap.data(), em).map((c) => ({ ...c }));
+            const k = indiceAtual(contratos);
+            const c = { ...contratos[k] };
+            for (const [campo, v] of Object.entries(upd)) if (DO_CONTRATO[campo]) c[DO_CONTRATO[campo]] = v;
+            if (upd.forma_cobranca && c.origem !== "abacatepay") c.origem = upd.forma_cobranca;
+            if (upd.status_assinatura) {
+                // Status mudado à mão: evento da Celcoin mais antigo que isso não volta atrás
+                c.status_evento_em = Timestamp.fromDate(new Date(em));
+                c.fim = upd.status_assinatura === "cancelada" ? c.fim || diaSP(new Date()) : null;
+            }
+            contratos[k] = c;
+            contratosUpd = { contratos, ...espelho(contratos) };
+        } else {
+            Object.assign(doAssinante, Object.fromEntries(Object.entries(upd).filter(([c]) => DO_CONTRATO[c])));
+        }
         await ref.update({
-            ...upd,
-            // Status mudado à mão: evento da Celcoin mais antigo que isso não volta atrás
-            ...(upd.status_assinatura ? { status_evento_em: Timestamp.fromDate(new Date(em)) } : {}),
+            ...doAssinante,
+            ...contratosUpd,
             historico_edicoes: FieldValue.arrayUnion(...entradasHistorico(mudancas, quemEditou(request), em)),
             ultima_atualizacao: FieldValue.serverTimestamp(),
         });

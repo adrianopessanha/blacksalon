@@ -494,8 +494,8 @@ export function ServiceForm() {
                 alert(`Lançamento salvo para ${activeBarber.name}!`)
             }
 
-            // Assinante de balcão: o servidor grava assinantes/{telefone} e avisa o Make
-            // (Celcoin nunca muda; Abacatepay só admin renova)
+            // Assinante de balcão: o servidor abre um contrato novo em assinantes/{telefone} e avisa o Make
+            // (Abacatepay só admin renova)
             if (formData.tipo === 'venda_assinatura' && clienteId) {
                 try {
                     const r = await chamarFuncao('venderAssinaturaBalcao', {
@@ -510,6 +510,8 @@ export function ServiceForm() {
                     })
                     if (r.resultado === 'bloqueado') {
                         alert(`Lançamento salvo, mas o cadastro de assinante NÃO foi alterado: este cliente é assinante ${r.origem}. Avise o Adriano.`)
+                    } else if (r.aviso === 'celcoin_ativo') {
+                        alert('Assinatura de balcão registrada. Este cliente ainda tem assinatura ATIVA na Celcoin: avise o Adriano para cancelar lá e não cobrar duas vezes.')
                     }
                 } catch (err) {
                     console.error('venderAssinaturaBalcao:', err)

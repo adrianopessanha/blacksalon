@@ -138,6 +138,39 @@ export function EditarAssinante({ id, cadastro, assinantes, onMudou, onFechar })
     )
 }
 
+// Contratos do assinante (o mais recente é o que vale); encerrados ficam só no histórico
+const ROTULO_STATUS_CONTRATO = {
+    ativa: ['ativo', 'text-emerald-400'], pagamento_recusado: ['cartão recusado', 'text-yellow-400'], vencido: ['vencido', 'text-red-400'],
+    aguardando_pagamento: ['aguardando pagamento', 'text-gray-400'], inativa: ['inativo', 'text-gray-500'],
+    cancelada: ['cancelado', 'text-red-400'], encerrado: ['encerrado (renovado)', 'text-gray-500'],
+}
+const ROTULO_FORMA = { celcoin: 'Celcoin', balcao: 'Balcão', pix_manual: 'Pix manual' }
+const dataCurta = (iso) => (iso ? iso.split('-').reverse().join('/') : '…')
+
+export function HistoricoContratos({ contratos, atual }) {
+    if (!contratos?.length) return null
+    const lista = [...contratos].sort((a, b) => String(b.inicio || '').localeCompare(String(a.inicio || '')) || String(b.criado_em || '').localeCompare(String(a.criado_em || '')))
+    return (
+        <div className="space-y-1">
+            <div className="text-gray-500">Contratos</div>
+            {lista.map(c => {
+                const [rot, cor] = ROTULO_STATUS_CONTRATO[c.status_assinatura] || [c.status_assinatura || '—', 'text-gray-500']
+                const vale = c.id === atual
+                return (
+                    <div key={c.id} className={`flex flex-wrap items-center gap-x-2 rounded-lg px-2 py-1 ${vale ? 'bg-cyan-950/40 border border-cyan-900/60' : 'text-gray-500'}`}>
+                        <span className={vale ? 'text-gray-100 font-semibold' : ''}>{c.origem === 'abacatepay' ? 'Abacatepay' : ROTULO_FORMA[c.forma] || c.forma}{c.celcoin_assinatura ? ` nº ${c.celcoin_assinatura}` : ''}</span>
+                        <span>{dataCurta(c.inicio)} – {c.fim ? dataCurta(c.fim) : (c.vencimento ? `vence ${dataCurta(c.vencimento)}` : 'hoje')}</span>
+                        {c.plano && <span>{c.plano}</span>}
+                        {c.valor != null && <span>R$ {c.valor}</span>}
+                        <span className={cor}>{rot}</span>
+                        {vale && <span className="text-[10px] font-bold text-cyan-300">VALE HOJE</span>}
+                    </div>
+                )
+            })}
+        </div>
+    )
+}
+
 // Pagador (casal/família) por busca, no lugar da lista com todos os nomes
 export function PagadorBusca({ id, pagador, assinantes, salvando, onDefinir }) {
     const [busca, setBusca] = useState('')

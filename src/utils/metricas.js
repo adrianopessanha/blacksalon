@@ -88,7 +88,11 @@ export function painel({ clientes, lancamentosMes, assinantes, cancelamentos, ho
         ticketBase: pagos.length,
         assinantesAtivos: assinantes.filter(a => a.status_assinatura === 'ativa').length,
         assinantesRecusados: assinantes.filter(a => a.status_assinatura === 'pagamento_recusado').length,
-        canceladosMes: [...canceladosMes].filter(t => assinantes.some(a => a.telefone === t && a.status_assinatura === 'cancelada')).length,
+        // Contratos cancelados com fim no mês (quem voltou depois continua contando no mês em que cancelou);
+        // cadastro sem contratos: evento de cancelamento do mês e status ainda cancelado
+        canceladosMes: assinantes.filter(a => a.contratos
+            ? a.contratos.some(c => c.status_assinatura === 'cancelada' && String(c.fim || '').startsWith(mes))
+            : canceladosMes.has(a.telefone) && a.status_assinatura === 'cancelada').length,
     }
 }
 
